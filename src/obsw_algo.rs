@@ -1,7 +1,9 @@
-use crate::obsw_interface::*;
+use std::pin::Pin;
 
 use postcard;
 use serde;
+
+use crate::obsw_interface::*;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Controls {
@@ -54,7 +56,8 @@ pub enum MessageB2G {
 }
 
 pub struct BlimpMainAlgo {
-    action_callback: Option<Box<dyn Fn(BlimpAction) -> () + Send>>,
+    action_callback:
+        Option<Box<dyn Fn(BlimpAction) -> Pin<Box<dyn std::future::Future<Output = ()>>> + Send>>,
     curr_flight_mode: FlightMode,
     controls: Controls,
     altitude: Option<f64>,
@@ -62,10 +65,7 @@ pub struct BlimpMainAlgo {
 }
 
 impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
-    fn handle_event(
-        &mut self,
-        ev: &BlimpEvent,
-    ) -> std::pin::Pin<Box<impl std::future::Future<Output = ()>>> {
+    fn handle_event(&mut self, ev: &BlimpEvent) -> Pin<Box<impl std::future::Future<Output = ()>>> {
         Box::pin(async move {
             match ev {
                 BlimpEvent::Control(ctrl) => {
@@ -98,14 +98,16 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     if let Ok(msg_deserialized) = postcard::from_bytes::<MessageG2B>(msg) {
                         match msg_deserialized {
                             MessageG2B::Ping(id) => {
-                                self.action_callback.as_ref().map(|x| {
+                                if let Some(fut) = self.action_callback.as_ref().map(|x| {
                                     x(BlimpAction::SendMsg(
                                         postcard::to_stdvec::<MessageB2G>(&MessageB2G::Pong(id))
                                             .unwrap(),
-                                    ));
-                                });
+                                    ))
+                                }) {
+                                    fut.await;
+                                }
                             }
-                            MessageG2B::Pong(id) => {}
+                            MessageG2B::Pong(_id) => {}
                             MessageG2B::Control(ctrl) => {
                                 self.handle_event(&BlimpEvent::Control(ctrl)).await;
                             }
@@ -117,17 +119,22 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                 _ => {}
             }
             if matches!(ev, BlimpEvent::SensorDataF64(..)) {
-                self.action_callback.as_ref().map(|x| {
+                if let Some(fut) = self.action_callback.as_ref().map(|x| {
                     x(BlimpAction::SendMsg(
                         postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardEvent(ev.clone()))
                             .unwrap(),
-                    ));
-                });
+                    ))
+                }) {
+                    fut.await;
+                }
             }
         })
     }
 
-    fn set_action_callback(&mut self, callback: Box<dyn Fn(BlimpAction) -> () + Send>) {
+    fn set_action_callback(
+        &mut self,
+        callback: Box<dyn Fn(BlimpAction) -> Pin<Box<dyn std::future::Future<Output = ()>>> + Send>,
+    ) {
         self.action_callback = Some(callback);
     }
 }
@@ -150,49 +157,60 @@ impl BlimpMainAlgo {
     pub async fn step(&mut self) {
         match self.curr_flight_mode {
             FlightMode::Manual => {
-                self.action_callback.as_ref().map(|x| {
-                    for i in 0..4 {
-                        let speed: i32 = self.controls.throttle
-                            + (if i % 2 == 0 { 1 } else { -1 }) * self.controls.yaw
-                            + self.controls.elevation;
-                        //Motor
-                        self.perform_action(x, BlimpAction::SetMotor { motor: i, speed });
-                        // Up-down servo
-                        self.perform_action(
-                            x,
-                            BlimpAction::SetServo {
-                                servo: 2 * i,
-                                location: self.controls.elevation as i16,
-                            },
-                        );
-                        //Sideways servo
-                        self.perform_action(
-                            x,
-                            BlimpAction::SetServo {
-                                servo: 2 * i + 1,
-                                location: self.controls.yaw as i16,
-                            },
-                        );
+                if let Some(fut) = self.action_callback.as_ref().map(|x| {
+                    async {
+                        for i in 0..4 {
+                            let speed: i32 = self.controls.throttle
+                                + (if i % 2 == 0 { 1 } else { -1 }) * self.controls.yaw
+                                + self.controls.elevation;
+                            //Motor
+                            self.perform_action(x, BlimpAction::SetMotor { motor: i, speed })
+                                .await;
+                            // Up-down servo
+                            self.perform_action(
+                                x,
+                                BlimpAction::SetServo {
+                                    servo: 2 * i,
+                                    location: self.controls.elevation as i16,
+                                },
+                            )
+                            .await;
+                            //Sideways servo
+                            self.perform_action(
+                                x,
+                                BlimpAction::SetServo {
+                                    servo: 2 * i + 1,
+                                    location: self.controls.yaw as i16,
+                                },
+                            )
+                            .await;
+                        }
                     }
-                });
+                }) {
+                    fut.await;
+                }
             }
             FlightMode::StabilizeAttiAlti => {}
         }
     }
 
-    fn perform_action(
+    async fn perform_action(
         &self,
-        action_callback: &(dyn Fn(BlimpAction) -> () + Send),
+        action_callback: &(dyn Fn(BlimpAction) -> Pin<Box<dyn std::future::Future<Output = ()>>>
+              + Send),
         action: BlimpAction,
     ) {
-        action_callback(action.clone());
+        action_callback(action.clone()).await;
+
+        // Some actions should be forwarded
         if matches!(
             action,
             BlimpAction::SetMotor { .. } | BlimpAction::SetServo { .. }
         ) {
             action_callback(BlimpAction::SendMsg(
                 postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardAction(action)).unwrap(),
-            ));
+            ))
+            .await;
         }
     }
 }
