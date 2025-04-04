@@ -10,5 +10,5 @@ pub trait BlimpAlgorithm<EventType, ActionType> {
         callback: Arc<
             dyn Fn(ActionType) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync,
         >,
-    );
+    ) -> Pin<Box<impl Future<Output = ()>>>;
 }

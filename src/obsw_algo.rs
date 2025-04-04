@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -61,7 +62,7 @@ pub struct BlimpMainAlgo {
     action_callback: TRwLock<
         Option<
             Arc<
-                dyn Fn(BlimpAction) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + Sync>>
+                dyn Fn(BlimpAction) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>>
                     + Send
                     + Sync,
             >,
@@ -75,7 +76,7 @@ pub struct BlimpMainAlgo {
 }
 
 impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
-    fn handle_event(&self, ev: BlimpEvent) -> Pin<Box<impl std::future::Future<Output = ()>>> {
+    fn handle_event(&self, ev: BlimpEvent) -> Pin<Box<impl Future<Output = ()>>> {
         Box::pin(async move {
             match &ev {
                 BlimpEvent::Control(ctrl) => {
@@ -168,13 +169,12 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
     fn set_action_callback(
         &mut self,
         callback: Arc<
-            dyn Fn(BlimpAction) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + Sync>>
-                + Send
-                + Sync,
+            dyn Fn(BlimpAction) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync,
         >,
-    ) {
-        //TODO: decide if this should be async too
-        *self.action_callback.blocking_write() = Some(callback);
+    ) -> Pin<Box<impl Future<Output = ()>>> {
+        Box::pin(async move {
+            *self.action_callback.write().await = Some(callback);
+        })
     }
 }
 
