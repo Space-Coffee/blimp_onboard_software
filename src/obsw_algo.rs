@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::sync::Arc;
 
 use postcard;
 use serde;
@@ -59,12 +60,20 @@ pub enum MessageB2G {
 pub struct BlimpMainAlgo {
     action_callback: TRwLock<
         Option<
-            Box<
-                dyn Fn(BlimpAction) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + Sync>>
-                    + Send,
+            Arc<
+                TRwLock<
+                    Box<
+                        dyn Fn(
+                                BlimpAction,
+                            )
+                                -> Pin<Box<dyn std::future::Future<Output = ()> + Send + Sync>>
+                            + Send,
+                    >,
+                >,
             >,
         >,
     >,
+
     curr_flight_mode: TRwLock<FlightMode>,
     controls: TRwLock<Controls>,
     altitude: TRwLock<Option<f64>>,
@@ -164,9 +173,16 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
 
     fn set_action_callback(
         &mut self,
-        callback: Box<
-            dyn Fn(BlimpAction) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + Sync>>
-                + Send,
+        callback: Arc<
+            TRwLock<
+                Box<
+                    dyn Fn(
+                            BlimpAction,
+                        )
+                            -> Pin<Box<dyn std::future::Future<Output = ()> + Send + Sync>>
+                        + Send,
+                >,
+            >,
         >,
     ) {
         //TODO: decide if this should be async too
@@ -189,7 +205,7 @@ impl BlimpMainAlgo {
         }
     }
 
-    pub async fn step(&mut self) {
+    pub async fn step(&self) {
         let curr_flight_mode = self.curr_flight_mode.read().await;
         match *curr_flight_mode {
             FlightMode::Manual => {
@@ -258,7 +274,7 @@ impl BlimpMainAlgo {
     async fn perform_action(&self, action: BlimpAction) {
         // action_callback.read().await(action.clone()).await;
         if let Some(ac) = &*self.action_callback.read().await {
-            ac(action.clone()).await;
+            ac.read().await(action.clone()).await;
         }
 
         // Some actions should be forwarded
@@ -271,7 +287,7 @@ impl BlimpMainAlgo {
             // ))
             // .await;
             if let Some(ac) = &*self.action_callback.read().await {
-                ac(BlimpAction::SendMsg(
+                ac.read().await(BlimpAction::SendMsg(
                     postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardAction(action)).unwrap(),
                 ))
                 .await;
