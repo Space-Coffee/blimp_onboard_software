@@ -1,7 +1,12 @@
-use crate::obsw_interface::*;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use postcard;
 use serde;
+use tokio::sync::RwLock as TRwLock;
+
+use crate::obsw_interface::*;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Controls {
@@ -54,22 +59,28 @@ pub enum MessageB2G {
 }
 
 pub struct BlimpMainAlgo {
-    action_callback: Option<Box<dyn Fn(BlimpAction) -> () + Send>>,
-    curr_flight_mode: FlightMode,
-    controls: Controls,
-    altitude: Option<f64>,
-    gps_location: Option<(f64, f64)>,
+    action_callback: TRwLock<
+        Option<
+            Arc<
+                dyn Fn(BlimpAction) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>>
+                    + Send
+                    + Sync,
+            >,
+        >,
+    >,
+
+    curr_flight_mode: TRwLock<FlightMode>,
+    controls: TRwLock<Controls>,
+    altitude: TRwLock<Option<f64>>,
+    gps_location: TRwLock<Option<(f64, f64)>>,
 }
 
 impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
-    fn handle_event(
-        &mut self,
-        ev: &BlimpEvent,
-    ) -> std::pin::Pin<Box<impl std::future::Future<Output = ()>>> {
+    fn handle_event(&self, ev: BlimpEvent) -> Pin<Box<impl Future<Output = ()>>> {
         Box::pin(async move {
-            match ev {
+            match &ev {
                 BlimpEvent::Control(ctrl) => {
-                    self.controls = ctrl.clone();
+                    *self.controls.write().await = ctrl.clone();
                 }
                 BlimpEvent::SensorDataF64(SensorType::Barometer, press) => {
                     // Compute altitude
@@ -83,31 +94,46 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     let base_pressure: f64 = 101325.0;
                     let temperature: f64 = 288.15;
                     let const_coef: f64 = 0.0292718; // R / g / M
-                    self.altitude =
+                    *self.altitude.write().await =
                         Some((base_pressure.ln() - press.ln()) * const_coef * temperature);
                 }
                 BlimpEvent::SensorDataF64(SensorType::GPSLatitude, latitude) => {
-                    self.gps_location =
-                        Some((*latitude, self.gps_location.unwrap_or((0.0, 0.0)).1));
+                    let prev_long = self.gps_location.read().await.unwrap_or((0.0, 0.0)).1;
+                    *self.gps_location.write().await = Some((*latitude, prev_long));
                 }
                 BlimpEvent::SensorDataF64(SensorType::GPSLongitude, longitude) => {
-                    self.gps_location =
-                        Some((self.gps_location.unwrap_or((0.0, 0.0)).0, *longitude));
+                    let prev_lat = self.gps_location.read().await.unwrap_or((0.0, 0.0)).0;
+                    *self.gps_location.write().await = Some((prev_lat, *longitude));
                 }
                 BlimpEvent::GetMsg(msg) => {
-                    if let Ok(msg_deserialized) = postcard::from_bytes::<MessageG2B>(msg) {
+                    if let Ok(msg_deserialized) = postcard::from_bytes::<MessageG2B>(&msg) {
                         match msg_deserialized {
                             MessageG2B::Ping(id) => {
-                                self.action_callback.as_ref().map(|x| {
-                                    x(BlimpAction::SendMsg(
-                                        postcard::to_stdvec::<MessageB2G>(&MessageB2G::Pong(id))
-                                            .unwrap(),
-                                    ));
-                                });
+                                // if let Some(fut) =
+                                //     self.action_callback.read().await.as_ref().map(|x| async {
+                                //         self.perform_action(
+                                //             x.as_ref(),
+                                //             BlimpAction::SendMsg(
+                                //                 postcard::to_stdvec::<MessageB2G>(
+                                //                     &MessageB2G::Pong(id),
+                                //                 )
+                                //                 .unwrap(),
+                                //             ),
+                                //         )
+                                //         .await
+                                //     })
+                                // {
+                                //     fut.await;
+                                // }
+                                self.perform_action(BlimpAction::SendMsg(
+                                    postcard::to_stdvec::<MessageB2G>(&MessageB2G::Pong(id))
+                                        .unwrap(),
+                                ))
+                                .await;
                             }
-                            MessageG2B::Pong(id) => {}
+                            MessageG2B::Pong(_id) => {}
                             MessageG2B::Control(ctrl) => {
-                                self.handle_event(&BlimpEvent::Control(ctrl)).await;
+                                self.handle_event(BlimpEvent::Control(ctrl)).await;
                             }
                         }
                     } else {
@@ -116,83 +142,144 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                 }
                 _ => {}
             }
-            if matches!(ev, BlimpEvent::SensorDataF64(..)) {
-                self.action_callback.as_ref().map(|x| {
-                    x(BlimpAction::SendMsg(
-                        postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardEvent(ev.clone()))
-                            .unwrap(),
-                    ));
-                });
+            if matches!(&ev, BlimpEvent::SensorDataF64(..)) {
+                // if let Some(fut) = self.action_callback.read().await.as_ref().map(|x| async {
+                //     self.perform_action(
+                //         x,
+                //         BlimpAction::SendMsg(
+                //             postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardEvent(
+                //                 ev.clone(),
+                //             ))
+                //             .unwrap(),
+                //         ),
+                //     )
+                //     .await
+                // }) {
+                //     fut.await;
+                // }
+                self.perform_action(BlimpAction::SendMsg(
+                    postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardEvent(ev.clone()))
+                        .unwrap(),
+                ))
+                .await;
             }
         })
     }
 
-    fn set_action_callback(&mut self, callback: Box<dyn Fn(BlimpAction) -> () + Send>) {
-        self.action_callback = Some(callback);
+    fn set_action_callback(
+        &mut self,
+        callback: Arc<
+            dyn Fn(BlimpAction) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync,
+        >,
+    ) -> Pin<Box<impl Future<Output = ()>>> {
+        Box::pin(async move {
+            *self.action_callback.write().await = Some(callback);
+        })
     }
 }
 
 impl BlimpMainAlgo {
     pub fn new() -> Self {
         Self {
-            action_callback: None,
-            curr_flight_mode: FlightMode::Manual,
-            controls: Controls {
+            action_callback: TRwLock::new(None),
+            curr_flight_mode: TRwLock::new(FlightMode::Manual),
+            controls: TRwLock::new(Controls {
                 throttle: 0,
                 elevation: 0,
                 yaw: 0,
-            },
-            altitude: None,
-            gps_location: None,
+            }),
+            altitude: TRwLock::new(None),
+            gps_location: TRwLock::new(None),
         }
     }
 
-    pub async fn step(&mut self) {
-        match self.curr_flight_mode {
+    pub async fn step(&self) {
+        let curr_flight_mode = self.curr_flight_mode.read().await;
+        match *curr_flight_mode {
             FlightMode::Manual => {
-                self.action_callback.as_ref().map(|x| {
-                    for i in 0..4 {
-                        let speed: i32 = self.controls.throttle
-                            + (if i % 2 == 0 { 1 } else { -1 }) * self.controls.yaw
-                            + self.controls.elevation;
-                        //Motor
-                        self.perform_action(x, BlimpAction::SetMotor { motor: i, speed });
-                        // Up-down servo
-                        self.perform_action(
-                            x,
-                            BlimpAction::SetServo {
-                                servo: 2 * i,
-                                location: self.controls.elevation as i16,
-                            },
-                        );
-                        //Sideways servo
-                        self.perform_action(
-                            x,
-                            BlimpAction::SetServo {
-                                servo: 2 * i + 1,
-                                location: self.controls.yaw as i16,
-                            },
-                        );
-                    }
-                });
+                // if let Some(fut) = self.action_callback.read().await.as_ref().map(|x| {
+                //     async {
+                //         for i in 0..4 {
+                //             let controls = self.controls.read().await;
+                //             let speed: i32 = controls.throttle
+                //                 + (if i % 2 == 0 { 1 } else { -1 }) * controls.yaw
+                //                 + controls.elevation;
+                //             //Motor
+                //             self.perform_action(
+                //                 x.as_ref(),
+                //                 BlimpAction::SetMotor { motor: i, speed },
+                //             )
+                //             .await;
+                //             // Up-down servo
+                //             self.perform_action(
+                //                 x.as_ref(),
+                //                 BlimpAction::SetServo {
+                //                     servo: 2 * i,
+                //                     location: controls.elevation as i16,
+                //                 },
+                //             )
+                //             .await;
+                //             //Sideways servo
+                //             self.perform_action(
+                //                 x.as_ref(),
+                //                 BlimpAction::SetServo {
+                //                     servo: 2 * i + 1,
+                //                     location: controls.yaw as i16,
+                //                 },
+                //             )
+                //             .await;
+                //         }
+                //     }
+                // }) {
+                //     fut.await;
+                // }
+                for i in 0..4 {
+                    let controls = self.controls.read().await;
+                    let speed: i32 = controls.throttle
+                        + (if i % 2 == 0 { 1 } else { -1 }) * controls.yaw
+                        + controls.elevation;
+                    //Motor
+                    self.perform_action(BlimpAction::SetMotor { motor: i, speed })
+                        .await;
+                    // Up-down servo
+                    self.perform_action(BlimpAction::SetServo {
+                        servo: 2 * i,
+                        location: controls.elevation as i16,
+                    })
+                    .await;
+                    //Sideways servo
+                    self.perform_action(BlimpAction::SetServo {
+                        servo: 2 * i + 1,
+                        location: controls.yaw as i16,
+                    })
+                    .await;
+                }
             }
             FlightMode::StabilizeAttiAlti => {}
         }
     }
 
-    fn perform_action(
-        &self,
-        action_callback: &(dyn Fn(BlimpAction) -> () + Send),
-        action: BlimpAction,
-    ) {
-        action_callback(action.clone());
+    async fn perform_action(&self, action: BlimpAction) {
+        // action_callback.read().await(action.clone()).await;
+        if let Some(ac) = &*self.action_callback.read().await {
+            ac(action.clone()).await;
+        }
+
+        // Some actions should be forwarded
         if matches!(
             action,
             BlimpAction::SetMotor { .. } | BlimpAction::SetServo { .. }
         ) {
-            action_callback(BlimpAction::SendMsg(
-                postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardAction(action)).unwrap(),
-            ));
+            // action_callback.read().await(BlimpAction::SendMsg(
+            //     postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardAction(action)).unwrap(),
+            // ))
+            // .await;
+            if let Some(ac) = &*self.action_callback.read().await {
+                ac(BlimpAction::SendMsg(
+                    postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardAction(action)).unwrap(),
+                ))
+                .await;
+            }
         }
     }
 }
