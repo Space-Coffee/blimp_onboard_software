@@ -2,7 +2,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use postcard;
 use serde;
 use tokio::sync::RwLock as TRwLock;
 
@@ -19,7 +18,8 @@ pub struct Controls {
 pub enum BlimpAction {
     SetServo { servo: u8, location: i16 },
     SetMotor { motor: u8, speed: i32 },
-    SendMsg(Vec<u8>),
+    SendMsg(Box<MessageB2G>), // This has to be boxed, because otherwise we would have infinitely
+                              // sized struct
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -33,7 +33,7 @@ pub enum SensorType {
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub enum BlimpEvent {
     Control(Controls),
-    GetMsg(Vec<u8>),
+    GetMsg(MessageG2B),
     SensorDataF64(SensorType, f64),
 }
 
@@ -106,38 +106,33 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     *self.gps_location.write().await = Some((prev_lat, *longitude));
                 }
                 BlimpEvent::GetMsg(msg) => {
-                    if let Ok(msg_deserialized) = postcard::from_bytes::<MessageG2B>(&msg) {
-                        match msg_deserialized {
-                            MessageG2B::Ping(id) => {
-                                // if let Some(fut) =
-                                //     self.action_callback.read().await.as_ref().map(|x| async {
-                                //         self.perform_action(
-                                //             x.as_ref(),
-                                //             BlimpAction::SendMsg(
-                                //                 postcard::to_stdvec::<MessageB2G>(
-                                //                     &MessageB2G::Pong(id),
-                                //                 )
-                                //                 .unwrap(),
-                                //             ),
-                                //         )
-                                //         .await
-                                //     })
-                                // {
-                                //     fut.await;
-                                // }
-                                self.perform_action(BlimpAction::SendMsg(
-                                    postcard::to_stdvec::<MessageB2G>(&MessageB2G::Pong(id))
-                                        .unwrap(),
-                                ))
-                                .await;
-                            }
-                            MessageG2B::Pong(_id) => {}
-                            MessageG2B::Control(ctrl) => {
-                                self.handle_event(BlimpEvent::Control(ctrl)).await;
-                            }
+                    match msg {
+                        MessageG2B::Ping(id) => {
+                            // if let Some(fut) =
+                            //     self.action_callback.read().await.as_ref().map(|x| async {
+                            //         self.perform_action(
+                            //             x.as_ref(),
+                            //             BlimpAction::SendMsg(
+                            //                 postcard::to_stdvec::<MessageB2G>(
+                            //                     &MessageB2G::Pong(id),
+                            //                 )
+                            //                 .unwrap(),
+                            //             ),
+                            //         )
+                            //         .await
+                            //     })
+                            // {
+                            //     fut.await;
+                            // }
+                            self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::Pong(
+                                *id,
+                            ))))
+                            .await;
                         }
-                    } else {
-                        eprintln!("Error occurred while deseerializing message");
+                        MessageG2B::Pong(_id) => {}
+                        MessageG2B::Control(ctrl) => {
+                            self.handle_event(BlimpEvent::Control(ctrl.clone())).await;
+                        }
                     }
                 }
                 _ => {}
@@ -157,10 +152,9 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                 // }) {
                 //     fut.await;
                 // }
-                self.perform_action(BlimpAction::SendMsg(
-                    postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardEvent(ev.clone()))
-                        .unwrap(),
-                ))
+                self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::ForwardEvent(
+                    ev.clone(),
+                ))))
                 .await;
             }
         })
@@ -275,9 +269,9 @@ impl BlimpMainAlgo {
             // ))
             // .await;
             if let Some(ac) = &*self.action_callback.read().await {
-                ac(BlimpAction::SendMsg(
-                    postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardAction(action)).unwrap(),
-                ))
+                ac(BlimpAction::SendMsg(Box::new(MessageB2G::ForwardAction(
+                    action,
+                ))))
                 .await;
             }
         }
