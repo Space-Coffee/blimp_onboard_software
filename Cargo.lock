@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "blimp_onboard_software"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "tokio",
@@ -224,13 +224,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[patch.unused]]
-name = "blimp_comm"
-version = "0.1.0"
+name = "blimp_ground_ws_interface"
+version = "0.2.0"
 
 [[patch.unused]]
 name = "physsim"
 version = "0.1.0"
 
 [[patch.unused]]
-name = "blimp_ground_ws_interface"
+name = "blimp_comm"
 version = "0.2.0"
