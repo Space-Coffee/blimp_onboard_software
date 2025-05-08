@@ -105,53 +105,19 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     let prev_lat = self.gps_location.read().await.unwrap_or((0.0, 0.0)).0;
                     *self.gps_location.write().await = Some((prev_lat, *longitude));
                 }
-                BlimpEvent::GetMsg(msg) => {
-                    match msg {
-                        MessageG2B::Ping(id) => {
-                            // if let Some(fut) =
-                            //     self.action_callback.read().await.as_ref().map(|x| async {
-                            //         self.perform_action(
-                            //             x.as_ref(),
-                            //             BlimpAction::SendMsg(
-                            //                 postcard::to_stdvec::<MessageB2G>(
-                            //                     &MessageB2G::Pong(id),
-                            //                 )
-                            //                 .unwrap(),
-                            //             ),
-                            //         )
-                            //         .await
-                            //     })
-                            // {
-                            //     fut.await;
-                            // }
-                            self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::Pong(
-                                *id,
-                            ))))
+                BlimpEvent::GetMsg(msg) => match msg {
+                    MessageG2B::Ping(id) => {
+                        self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::Pong(*id))))
                             .await;
-                        }
-                        MessageG2B::Pong(_id) => {}
-                        MessageG2B::Control(ctrl) => {
-                            self.handle_event(BlimpEvent::Control(ctrl.clone())).await;
-                        }
                     }
-                }
+                    MessageG2B::Pong(_id) => {}
+                    MessageG2B::Control(ctrl) => {
+                        self.handle_event(BlimpEvent::Control(ctrl.clone())).await;
+                    }
+                },
                 _ => {}
             }
             if matches!(&ev, BlimpEvent::SensorDataF64(..)) {
-                // if let Some(fut) = self.action_callback.read().await.as_ref().map(|x| async {
-                //     self.perform_action(
-                //         x,
-                //         BlimpAction::SendMsg(
-                //             postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardEvent(
-                //                 ev.clone(),
-                //             ))
-                //             .unwrap(),
-                //         ),
-                //     )
-                //     .await
-                // }) {
-                //     fut.await;
-                // }
                 self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::ForwardEvent(
                     ev.clone(),
                 ))))
@@ -191,42 +157,6 @@ impl BlimpMainAlgo {
         let curr_flight_mode = self.curr_flight_mode.read().await;
         match *curr_flight_mode {
             FlightMode::Manual => {
-                // if let Some(fut) = self.action_callback.read().await.as_ref().map(|x| {
-                //     async {
-                //         for i in 0..4 {
-                //             let controls = self.controls.read().await;
-                //             let speed: i32 = controls.throttle
-                //                 + (if i % 2 == 0 { 1 } else { -1 }) * controls.yaw
-                //                 + controls.elevation;
-                //             //Motor
-                //             self.perform_action(
-                //                 x.as_ref(),
-                //                 BlimpAction::SetMotor { motor: i, speed },
-                //             )
-                //             .await;
-                //             // Up-down servo
-                //             self.perform_action(
-                //                 x.as_ref(),
-                //                 BlimpAction::SetServo {
-                //                     servo: 2 * i,
-                //                     location: controls.elevation as i16,
-                //                 },
-                //             )
-                //             .await;
-                //             //Sideways servo
-                //             self.perform_action(
-                //                 x.as_ref(),
-                //                 BlimpAction::SetServo {
-                //                     servo: 2 * i + 1,
-                //                     location: controls.yaw as i16,
-                //                 },
-                //             )
-                //             .await;
-                //         }
-                //     }
-                // }) {
-                //     fut.await;
-                // }
                 for i in 0..4 {
                     let controls = self.controls.read().await;
                     let speed: i32 = controls.throttle
@@ -264,10 +194,6 @@ impl BlimpMainAlgo {
             action,
             BlimpAction::SetMotor { .. } | BlimpAction::SetServo { .. }
         ) {
-            // action_callback.read().await(BlimpAction::SendMsg(
-            //     postcard::to_stdvec::<MessageB2G>(&MessageB2G::ForwardAction(action)).unwrap(),
-            // ))
-            // .await;
             if let Some(ac) = &*self.action_callback.read().await {
                 ac(BlimpAction::SendMsg(Box::new(MessageB2G::ForwardAction(
                     action,
