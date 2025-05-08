@@ -1,9 +1,8 @@
 [package]
 name = "blimp_onboard_software"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-postcard = { version = "1.0.10", features = ["use-std"] }
-serde = "1.0.215"
+serde = { version = "1.0.215", features = ["default", "derive"] }
 tokio = { version = "1.44.1", features = ["default", "sync"] }
