@@ -9,15 +9,25 @@ use crate::obsw_interface::*;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Controls {
-    pub throttle: i32,
-    pub elevation: i32,
-    pub yaw: i32,
+    pub throttle_main: f32,       // Generally influences speed
+    pub throttle_split: [f32; 4], // Allows you to steer motors individually
+    pub sideways: f32,            // Left/right linear movement
+    pub elevation: f32,           // Up-down motion
+    pub pitch: f32,               // Rotate forward-backward
+    pub roll: f32,                // Roll left/right
+    pub yaw: f32,                 // Rotate left/right - change heading
+    pub desired_flight_mode: Option<FlightMode>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub enum BlimpAction {
-    SetServo { servo: u8, location: i16 },
-    SetMotor { motor: u8, speed: i32 },
+    // Even numbers are up-down servers. Odd numbers are left-right ones.
+    // Servos corresponding to given motor i are 2i and 2i+1.
+    SetServo { servo: u8, location: f32 },
+    // Motors layout
+    // 0 1
+    // 2 3
+    SetMotor { motor: u8, speed: f32 },
     SendMsg(Box<MessageB2G>), // This has to be boxed, because otherwise we would have infinitely
                               // sized struct
 }
@@ -25,6 +35,8 @@ pub enum BlimpAction {
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub enum SensorType {
     Barometer,
+    MagnetometerHeading,
+    Accelerometer,
     GPSLatitude,
     GPSLongitude,
     GPSAltitude,
@@ -37,7 +49,7 @@ pub enum BlimpEvent {
     SensorDataF64(SensorType, f64),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub enum FlightMode {
     Manual,            // Throttle -> motors speed; Pitch -> motors pitch; Roll -> motors yaw
     StabilizeAttiAlti, // Maintain altitude and attitude/azimuth
@@ -159,9 +171,8 @@ impl BlimpMainAlgo {
             FlightMode::Manual => {
                 for i in 0..4 {
                     let controls = self.controls.read().await;
-                    let speed: i32 = controls.throttle
-                        + (if i % 2 == 0 { 1 } else { -1 }) * controls.yaw
-                        + controls.elevation;
+                    let speed: f32 = controls.throttle_split[i]
+                        + (if i % 2 == 0 { 1.0 } else { -1.0 }) * controls.yaw;
                     //Motor
                     self.perform_action(BlimpAction::SetMotor { motor: i, speed })
                         .await;
