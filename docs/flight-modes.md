@@ -37,3 +37,15 @@ Positive computed roll will add to left LRFV's up components, and subtract from 
 Positive computed yaw will add that motor's displacement (position relative to the center of mass) rotated clockwise to the LRFV.
 
 Then, for every motor, we'll compute servo angles based on its LRFV's direction, and set motor speed to its magnitude.
+
+## AltiAtti
+
+Very similar to Atti, but we'll instead add elevation to persistent desired altitude, and use PID to try to achieve that altitude.
+
+Computed computed elevation will add to MDFV's up component.
+
+## Future flight modes
+
+GPS - position stabilization, so wind will automatically be countered.
+
+Waypoints - fly to set points.
