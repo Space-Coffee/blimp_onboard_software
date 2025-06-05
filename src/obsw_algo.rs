@@ -4,8 +4,10 @@ use std::sync::Arc;
 
 use serde;
 use tokio::sync::RwLock as TRwLock;
+use tokio::time::Instant;
 
 use crate::obsw_interface::*;
+use crate::pid::PidRegulator;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Controls {
@@ -49,7 +51,7 @@ pub enum BlimpEvent {
     SensorDataF64(SensorType, f64),
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum FlightMode {
     Manual,   // Throttle -> motors speed; Pitch -> motors pitch; Roll -> motors yaw
     Atti,     // Stabilize heading, control thrust vector
@@ -86,6 +88,9 @@ pub struct BlimpMainAlgo {
     controls: TRwLock<Controls>,
     altitude: TRwLock<Option<f64>>,
     gps_location: TRwLock<Option<(f64, f64)>>,
+
+    altitude_pid: TRwLock<PidRegulator<f64>>,
+    previous_step_time: Instant,
 }
 
 impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
@@ -155,6 +160,7 @@ impl BlimpMainAlgo {
     pub fn new() -> Self {
         Self {
             action_callback: TRwLock::new(None),
+
             curr_flight_mode: TRwLock::new(FlightMode::Manual),
             controls: TRwLock::new(Controls {
                 throttle_main: 0.0,
@@ -168,14 +174,30 @@ impl BlimpMainAlgo {
             }),
             altitude: TRwLock::new(None),
             gps_location: TRwLock::new(None),
+
+            altitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 1.0, 1.0)),
+            previous_step_time: TRwLock::new(Instant::now()),
         }
     }
 
     pub async fn step(&self) {
-        let curr_flight_mode = self.curr_flight_mode.read().await;
+        let mut curr_flight_mode = self.curr_flight_mode.write().await;
+        let controls = self.controls.read().await;
+        if *curr_flight_mode != controls.desired_flight_mode {
+            match controls.desired_flight_mode {
+                FlightMode::Manual => {}
+                FlightMode::Atti => {}
+                FlightMode::AltiAtti => {
+                    self.altitude_pid.write().await.setpoint =
+                        (*self.altitude.read().await).unwrap_or(0.0);
+                }
+            }
+        }
+        *curr_flight_mode = controls.desired_flight_mode.clone();
+
+        let curr_flight_mode = curr_flight_mode.downgrade();
         match *curr_flight_mode {
             FlightMode::Manual => {
-                let controls = self.controls.read().await;
                 for i in 0..(4 as u8) {
                     let speed: f32 = controls.throttle_split[i as usize]
                         + (if i % 2 == 0 { 1.0 } else { -1.0 }) * controls.yaw;
@@ -197,7 +219,14 @@ impl BlimpMainAlgo {
                 }
             }
             FlightMode::Atti => {}
-            FlightMode::AltiAtti => {}
+            FlightMode::AltiAtti => {
+                if let Some(altitude) = *self.altitude.read().await {
+                    self.altitude_pid
+                        .write()
+                        .await
+                        .update(self.altitude.read().await);
+                }
+            }
         }
     }
 
