@@ -16,7 +16,7 @@ pub struct Controls {
     pub pitch: f32,               // Rotate forward-backward
     pub roll: f32,                // Roll left/right
     pub yaw: f32,                 // Rotate left/right - change heading
-    pub desired_flight_mode: Option<FlightMode>,
+    pub desired_flight_mode: FlightMode,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -157,9 +157,14 @@ impl BlimpMainAlgo {
             action_callback: TRwLock::new(None),
             curr_flight_mode: TRwLock::new(FlightMode::Manual),
             controls: TRwLock::new(Controls {
-                throttle: 0,
-                elevation: 0,
-                yaw: 0,
+                throttle_main: 0.0,
+                throttle_split: [0.0, 0.0, 0.0, 0.0],
+                sideways: 0.0,
+                elevation: 0.0,
+                pitch: 0.0,
+                roll: 0.0,
+                yaw: 0.0,
+                desired_flight_mode: FlightMode::Manual,
             }),
             altitude: TRwLock::new(None),
             gps_location: TRwLock::new(None),
@@ -170,9 +175,9 @@ impl BlimpMainAlgo {
         let curr_flight_mode = self.curr_flight_mode.read().await;
         match *curr_flight_mode {
             FlightMode::Manual => {
-                for i in 0..4 {
-                    let controls = self.controls.read().await;
-                    let speed: f32 = controls.throttle_split[i]
+                let controls = self.controls.read().await;
+                for i in 0..(4 as u8) {
+                    let speed: f32 = controls.throttle_split[i as usize]
                         + (if i % 2 == 0 { 1.0 } else { -1.0 }) * controls.yaw;
                     //Motor
                     self.perform_action(BlimpAction::SetMotor { motor: i, speed })
@@ -180,17 +185,18 @@ impl BlimpMainAlgo {
                     // Up-down servo
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i,
-                        location: controls.elevation as i16,
+                        location: controls.elevation * 180.0,
                     })
                     .await;
                     //Sideways servo
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i + 1,
-                        location: controls.yaw as i16,
+                        location: controls.yaw * 180.0,
                     })
                     .await;
                 }
             }
+            FlightMode::Atti => {}
             FlightMode::AltiAtti => {}
         }
     }
