@@ -51,8 +51,9 @@ pub enum BlimpEvent {
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub enum FlightMode {
-    Manual,            // Throttle -> motors speed; Pitch -> motors pitch; Roll -> motors yaw
-    StabilizeAttiAlti, // Maintain altitude and attitude/azimuth
+    Manual,   // Throttle -> motors speed; Pitch -> motors pitch; Roll -> motors yaw
+    Atti,     // Stabilize heading, control thrust vector
+    AltiAtti, // Like Atti, but also stabilize altitude
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -190,7 +191,7 @@ impl BlimpMainAlgo {
                     .await;
                 }
             }
-            FlightMode::StabilizeAttiAlti => {}
+            FlightMode::AltiAtti => {}
         }
     }
 
