@@ -12,16 +12,17 @@ pub struct PidRegulator<T> {
 
 impl<T> PidRegulator<T>
 where
-    T: Num,
+    T: Clone + num_traits::Num + num_traits::NumAssign + num_traits::NumAssignRef,
 {
     pub fn update(&mut self, current: T, delta_time: T) -> T {
-        let prop = (self.setpoint - current) * self.k_p;
+        let prop = (self.setpoint.clone() - current.clone()) * self.k_p.clone();
 
-        self.deviation_integral += (current - self.setpoint) * delta_time;
-        let inte = self.deviation_integral * self.k_i;
+        self.deviation_integral += (current.clone() - self.setpoint.clone()) * delta_time.clone();
+        let inte = self.deviation_integral.clone() * self.k_i.clone();
 
-        let current_deviation = current - self.setpoint;
-        let deri = (current_deviation - self.previous_deviation) * self.k_d / delta_time;
+        let current_deviation = current - self.setpoint.clone();
+        let deri = (current_deviation.clone() - self.previous_deviation.clone()) * self.k_d.clone()
+            / delta_time;
         self.previous_deviation = current_deviation;
 
         return prop + inte + deri;
