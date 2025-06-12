@@ -39,7 +39,9 @@ pub enum BlimpAction {
 pub enum SensorType {
     Barometer,
     MagnetometerHeading,
-    Accelerometer,
+    AccelerometerX,
+    AccelerometerY,
+    AccelerometerZ,
     GPSLatitude,
     GPSLongitude,
     GPSAltitude,
@@ -89,6 +91,7 @@ pub struct BlimpMainAlgo {
     controls: TRwLock<Controls>,
     altitude: TRwLock<Option<f64>>,
     gps_location: TRwLock<Option<(f64, f64)>>,
+    acceleration: TRwLock<Option<(f64, f64, f64)>>,
 
     altitude_pid: TRwLock<PidRegulator<f64>>,
     previous_step_time: TRwLock<Instant>,
@@ -115,6 +118,21 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     let const_coef: f64 = 0.0292718; // R / g / M
                     *self.altitude.write().await =
                         Some((base_pressure.ln() - press.ln()) * const_coef * temperature);
+                }
+                BlimpEvent::SensorDataF64(SensorType::AccelerometerX, acc_x) => {
+                    let mut acc_locked = self.acceleration.write().await;
+                    let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
+                    *acc_locked = Some((*acc_x, prev_acc.1, prev_acc.2))
+                }
+                BlimpEvent::SensorDataF64(SensorType::AccelerometerY, acc_y) => {
+                    let mut acc_locked = self.acceleration.write().await;
+                    let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
+                    *acc_locked = Some((prev_acc.0, *acc_y, prev_acc.2))
+                }
+                BlimpEvent::SensorDataF64(SensorType::AccelerometerZ, acc_z) => {
+                    let mut acc_locked = self.acceleration.write().await;
+                    let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
+                    *acc_locked = Some((prev_acc.0, prev_acc.1, *acc_z))
                 }
                 BlimpEvent::SensorDataF64(SensorType::GPSLatitude, latitude) => {
                     let prev_long = self.gps_location.read().await.unwrap_or((0.0, 0.0)).1;
