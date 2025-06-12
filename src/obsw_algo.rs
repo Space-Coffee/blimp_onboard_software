@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use crate::obsw_interface::*;
 use crate::pid::PidRegulator;
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Controls {
     pub throttle_main: f32,       // Generally influences speed
     pub throttle_split: [f32; 4], // Allows you to steer motors individually
