@@ -92,6 +92,7 @@ pub struct BlimpMainAlgo {
     altitude: TRwLock<Option<f64>>,
     gps_location: TRwLock<Option<(f64, f64)>>,
     acceleration: TRwLock<Option<(f64, f64, f64)>>,
+    heading: TRwLock<Option<f64>>,
 
     altitude_pid: TRwLock<PidRegulator<f64>>,
     previous_step_time: TRwLock<Instant>,
@@ -118,6 +119,9 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     let const_coef: f64 = 0.0292718; // R / g / M
                     *self.altitude.write().await =
                         Some((base_pressure.ln() - press.ln()) * const_coef * temperature);
+                }
+                BlimpEvent::SensorDataF64(SensorType::MagnetometerHeading, heading) => {
+                    *self.heading.write().await = Some(*heading);
                 }
                 BlimpEvent::SensorDataF64(SensorType::AccelerometerX, acc_x) => {
                     let mut acc_locked = self.acceleration.write().await;
@@ -193,6 +197,8 @@ impl BlimpMainAlgo {
             }),
             altitude: TRwLock::new(None),
             gps_location: TRwLock::new(None),
+            acceleration: TRwLock::new(None),
+            heading: TRwLock::new(None),
 
             altitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 1.0, 1.0)),
             previous_step_time: TRwLock::new(Instant::now()),
@@ -291,13 +297,13 @@ impl BlimpMainAlgo {
 
             self.perform_action(BlimpAction::SetServo {
                 servo: 2 * i as u8,
-                location: f64::atan2(lfv_z, lfv_hor) as f32,
+                location: (f64::atan2(lfv_z, lfv_hor) * 180.0 / std::f64::consts::PI) as f32,
             })
             .await;
             // Sideways servo
             self.perform_action(BlimpAction::SetServo {
                 servo: (2 * i + 1) as u8,
-                location: f64::atan2(lfv_y, lfv_x) as f32,
+                location: (f64::atan2(lfv_y, lfv_x) * 180.0 / std::f64::consts::PI) as f32,
             })
             .await;
 
