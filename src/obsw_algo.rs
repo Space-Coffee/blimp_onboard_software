@@ -90,7 +90,7 @@ pub struct BlimpMainAlgo {
     gps_location: TRwLock<Option<(f64, f64)>>,
 
     altitude_pid: TRwLock<PidRegulator<f64>>,
-    previous_step_time: Instant,
+    previous_step_time: TRwLock<Instant>,
 }
 
 impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
@@ -221,13 +221,16 @@ impl BlimpMainAlgo {
             FlightMode::Atti => {}
             FlightMode::AltiAtti => {
                 if let Some(altitude) = *self.altitude.read().await {
-                    self.altitude_pid
-                        .write()
-                        .await
-                        .update(self.altitude.read().await);
+                    self.altitude_pid.write().await.update(
+                        altitude.clone(),
+                        (tokio::time::Instant::now() - *self.previous_step_time.read().await)
+                            .as_secs_f64(),
+                    );
                 }
             }
         }
+
+        *self.previous_step_time.write().await = tokio::time::Instant::now();
     }
 
     async fn perform_action(&self, action: BlimpAction) {
