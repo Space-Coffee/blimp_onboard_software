@@ -2,6 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use nalgebra as na;
 use serde;
 use tokio::sync::RwLock as TRwLock;
 use tokio::time::Instant;
@@ -250,6 +251,44 @@ impl BlimpMainAlgo {
                 ))))
                 .await;
             }
+        }
+    }
+
+    // MDFV - main desired force vector
+    // LRFVs - local rotating force vectors
+    // LFVs - local force vectors = MDFV + LRFV
+    async fn vectored_thrust(&self, mdfv: na::Vector3<f64>, lrfvs: &[na::Vector3<f64>]) {
+        let lfvs = lrfvs
+            .iter()
+            .map(|x| x + mdfv)
+            .collect::<Vec<na::Vector3<f64>>>();
+        for i in 0..lrfvs.len() {
+            // Up-down servo
+            let lfv_x = lfvs[i].x;
+            let lfv_y = lfvs[i].y;
+            let lfv_z = lfvs[i].z;
+            let lfv_hor = (f64::powf(lfv_x, 2.0) + f64::powf(lfv_y, 2.0)).sqrt();
+            let lfv_magn =
+                (f64::powf(lfv_x, 2.0) + f64::powf(lfv_y, 2.0) + f64::powf(lfv_z, 2.0)).sqrt();
+
+            self.perform_action(BlimpAction::SetServo {
+                servo: 2 * i as u8,
+                location: f64::atan2(lfv_z, lfv_hor) as f32,
+            })
+            .await;
+            // Sideways servo
+            self.perform_action(BlimpAction::SetServo {
+                servo: (2 * i + 1) as u8,
+                location: f64::atan2(lfv_y, lfv_x) as f32,
+            })
+            .await;
+
+            // Motor
+            self.perform_action(BlimpAction::SetMotor {
+                motor: i as u8,
+                speed: lfv_magn as f32,
+            })
+            .await;
         }
     }
 }
