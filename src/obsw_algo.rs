@@ -94,6 +94,7 @@ pub struct BlimpMainAlgo {
     acceleration: TRwLock<Option<(f64, f64, f64)>>,
     heading: TRwLock<Option<f64>>,
 
+    attitude_pid: TRwLock<PidRegulator<f64>>,
     altitude_pid: TRwLock<PidRegulator<f64>>,
     previous_step_time: TRwLock<Instant>,
 }
@@ -200,6 +201,7 @@ impl BlimpMainAlgo {
             acceleration: TRwLock::new(None),
             heading: TRwLock::new(None),
 
+            attitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 1.0, 1.0)),
             altitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 1.0, 1.0)),
             previous_step_time: TRwLock::new(Instant::now()),
         }
@@ -211,8 +213,13 @@ impl BlimpMainAlgo {
         if *curr_flight_mode != controls.desired_flight_mode {
             match controls.desired_flight_mode {
                 FlightMode::Manual => {}
-                FlightMode::Atti => {}
+                FlightMode::Atti => {
+                    self.attitude_pid.write().await.setpoint =
+                        (*self.heading.read().await).unwrap_or(0.0);
+                }
                 FlightMode::AltiAtti => {
+                    self.attitude_pid.write().await.setpoint =
+                        (*self.heading.read().await).unwrap_or(0.0);
                     self.altitude_pid.write().await.setpoint =
                         (*self.altitude.read().await).unwrap_or(0.0);
                 }
@@ -244,15 +251,43 @@ impl BlimpMainAlgo {
                     .await;
                 }
             }
-            FlightMode::Atti => {}
-            FlightMode::AltiAtti => {
-                if let Some(altitude) = *self.altitude.read().await {
-                    self.altitude_pid.write().await.update(
-                        altitude.clone(),
-                        (tokio::time::Instant::now() - *self.previous_step_time.read().await)
-                            .as_secs_f64(),
-                    );
+            FlightMode::Atti | FlightMode::AltiAtti => {
+                let previous_step_time = self.previous_step_time.read().await;
+                let delta_time = (tokio::time::Instant::now() - *previous_step_time).as_secs_f64();
+
+                let mut attitude_pid = self.attitude_pid.write().await;
+                let heading = self.heading.read().await;
+                attitude_pid.setpoint += controls.yaw as f64 * delta_time;
+                let attitude_pid_result = if let Some(heading) = *heading {
+                    Some(attitude_pid.update(heading.clone(), delta_time))
+                } else {
+                    None
+                };
+
+                let mut altitude_pid = self.altitude_pid.write().await;
+                let altitude = self.altitude.read().await;
+                let altitude_pid_result = if *curr_flight_mode == FlightMode::AltiAtti {
+                    altitude_pid.setpoint += controls.elevation as f64 * delta_time;
+                    if let Some(altitude) = *altitude {
+                        Some(altitude_pid.update(altitude.clone(), delta_time))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let mut mdfv = na::Vector3::<f64>::zeros();
+                let mut lrfvs = Vec::<na::Vector3<f64>>::new();
+                for _ in 0..4 {
+                    lrfvs.push(na::Vector3::<f64>::zeros());
                 }
+
+                if let Some(altitude_pid_result) = altitude_pid_result {
+                    mdfv.z += altitude_pid_result;
+                }
+
+                self.vectored_thrust(mdfv, &lrfvs).await;
             }
         }
 
