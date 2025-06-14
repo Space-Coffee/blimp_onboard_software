@@ -283,9 +283,13 @@ impl BlimpMainAlgo {
                     lrfvs.push(na::Vector3::<f64>::zeros());
                 }
 
-                if let Some(altitude_pid_result) = altitude_pid_result {
-                    mdfv.z += altitude_pid_result;
-                }
+                mdfv.x += controls.sideways as f64;
+                mdfv.y += controls.throttle_main as f64;
+                mdfv.z += if let Some(altitude_pid_result) = altitude_pid_result {
+                    altitude_pid_result
+                } else {
+                    controls.elevation as f64
+                };
 
                 self.vectored_thrust(mdfv, &lrfvs).await;
             }
