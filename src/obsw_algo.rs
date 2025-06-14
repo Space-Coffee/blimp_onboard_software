@@ -65,7 +65,9 @@ pub enum FlightMode {
 pub struct BlimpState {
     flight_mode: FlightMode,
     altitude: Option<f64>,
+    desired_altitude: Option<f64>,
     heading: Option<f64>,
+    desired_heading: Option<f64>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -209,8 +211,8 @@ impl BlimpMainAlgo {
             acceleration: TRwLock::new(None),
             heading: TRwLock::new(None),
 
-            attitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 1.0, 1.0)),
-            altitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 1.0, 1.0)),
+            attitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 0.15, 0.05)),
+            altitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 0.15, 0.05)),
             previous_step_time: TRwLock::new(Instant::now()),
         }
     }
@@ -307,7 +309,19 @@ impl BlimpMainAlgo {
             BlimpState {
                 flight_mode: curr_flight_mode.clone(),
                 altitude: *self.altitude.read().await,
+                desired_altitude: if *curr_flight_mode == FlightMode::AltiAtti {
+                    Some(self.altitude_pid.read().await.setpoint)
+                } else {
+                    None
+                },
                 heading: *self.heading.read().await,
+                desired_heading: if *curr_flight_mode == FlightMode::Atti
+                    || *curr_flight_mode == FlightMode::AltiAtti
+                {
+                    Some(self.attitude_pid.read().await.setpoint)
+                } else {
+                    None
+                },
             },
         ))))
         .await;
