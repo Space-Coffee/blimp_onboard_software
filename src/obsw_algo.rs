@@ -61,7 +61,7 @@ pub enum FlightMode {
     AltiAtti, // Like Atti, but also stabilize altitude
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct BlimpState {
     flight_mode: FlightMode,
     altitude: Option<f64>,
