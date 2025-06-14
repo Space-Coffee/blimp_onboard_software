@@ -62,6 +62,13 @@ pub enum FlightMode {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct BlimpState {
+    flight_mode: FlightMode,
+    altitude: Option<f64>,
+    heading: Option<f64>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub enum MessageG2B {
     Ping(u32),
     Pong(u32),
@@ -74,6 +81,7 @@ pub enum MessageB2G {
     Pong(u32),
     ForwardAction(BlimpAction),
     ForwardEvent(BlimpEvent),
+    BlimpState(BlimpState),
 }
 
 pub struct BlimpMainAlgo {
@@ -294,6 +302,15 @@ impl BlimpMainAlgo {
                 self.vectored_thrust(mdfv, &lrfvs).await;
             }
         }
+
+        self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::BlimpState(
+            BlimpState {
+                flight_mode: curr_flight_mode.clone(),
+                altitude: *self.altitude.read().await,
+                heading: *self.heading.read().await,
+            },
+        ))))
+        .await;
 
         *self.previous_step_time.write().await = tokio::time::Instant::now();
     }
