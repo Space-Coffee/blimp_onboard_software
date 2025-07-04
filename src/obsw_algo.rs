@@ -71,6 +71,8 @@ pub struct BlimpState {
     desired_altitude: Option<f64>,
     heading: Option<f64>,
     desired_heading: Option<f64>,
+    pitch: f64,
+    roll: f64,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -106,6 +108,7 @@ pub struct BlimpMainAlgo {
     gps_location: TRwLock<Option<(f64, f64)>>,
     acceleration: TRwLock<Option<(f64, f64, f64)>>,
     heading: TRwLock<Option<f64>>,
+    pitch_roll: TRwLock<(f64, f64)>,
 
     attitude_pid: TRwLock<PidRegulator<f64>>,
     altitude_pid: TRwLock<PidRegulator<f64>>,
@@ -140,17 +143,26 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                 BlimpEvent::SensorDataF64(SensorType::AccelerometerX, acc_x) => {
                     let mut acc_locked = self.acceleration.write().await;
                     let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
-                    *acc_locked = Some((*acc_x, prev_acc.1, prev_acc.2))
+                    *acc_locked = Some((*acc_x, prev_acc.1, prev_acc.2));
                 }
                 BlimpEvent::SensorDataF64(SensorType::AccelerometerY, acc_y) => {
                     let mut acc_locked = self.acceleration.write().await;
                     let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
-                    *acc_locked = Some((prev_acc.0, *acc_y, prev_acc.2))
+                    *acc_locked = Some((prev_acc.0, *acc_y, prev_acc.2));
                 }
                 BlimpEvent::SensorDataF64(SensorType::AccelerometerZ, acc_z) => {
                     let mut acc_locked = self.acceleration.write().await;
                     let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
-                    *acc_locked = Some((prev_acc.0, prev_acc.1, *acc_z))
+                    let acc_new = (prev_acc.0, prev_acc.1, *acc_z);
+                    *acc_locked = Some(acc_new);
+
+                    let acc_resultant =
+                        (acc_new.0 * acc_new.0 + acc_new.1 * acc_new.1 + acc_new.2 * acc_new.2)
+                            .sqrt();
+
+                    let pitch = (-acc_new.1 / acc_resultant).asin();
+                    let roll = (-acc_new.1).atan2(acc_new.2);
+                    *self.pitch_roll.write().await = (pitch, roll);
                 }
                 BlimpEvent::SensorDataF64(SensorType::GPSLatitude, latitude) => {
                     let prev_long = self.gps_location.read().await.unwrap_or((0.0, 0.0)).1;
@@ -213,6 +225,7 @@ impl BlimpMainAlgo {
             gps_location: TRwLock::new(None),
             acceleration: TRwLock::new(None),
             heading: TRwLock::new(None),
+            pitch_roll: TRwLock::new((0.0, 0.0)),
 
             attitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 0.15, 0.05)),
             altitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 0.15, 0.05)),
@@ -308,6 +321,7 @@ impl BlimpMainAlgo {
             }
         }
 
+        let pitch_roll_locked = self.pitch_roll.read().await;
         self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::BlimpState(
             BlimpState {
                 flight_mode: curr_flight_mode.clone(),
@@ -325,6 +339,8 @@ impl BlimpMainAlgo {
                 } else {
                     None
                 },
+                pitch: pitch_roll_locked.0,
+                roll: pitch_roll_locked.1,
             },
         ))))
         .await;
