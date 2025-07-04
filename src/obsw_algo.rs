@@ -161,7 +161,7 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                         (acc_new.0 * acc_new.0 + acc_new.1 * acc_new.1 + acc_new.2 * acc_new.2)
                             .sqrt();
 
-                    let pitch = (-acc_new.0 / acc_resultant).asin();
+                    let pitch = (acc_new.0 / acc_resultant).asin();
                     let roll = (-acc_new.1).atan2(acc_new.2);
                     *self.pitch_roll.write().await = (pitch, roll);
                 }
