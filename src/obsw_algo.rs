@@ -156,6 +156,7 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     let acc_new = (prev_acc.0, prev_acc.1, *acc_z);
                     *acc_locked = Some(acc_new);
 
+                    // See: https://mwrona.com/posts/accel-roll-pitch/
                     let acc_resultant =
                         (acc_new.0 * acc_new.0 + acc_new.1 * acc_new.1 + acc_new.2 * acc_new.2)
                             .sqrt();
