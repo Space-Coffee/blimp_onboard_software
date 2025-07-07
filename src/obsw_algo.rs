@@ -67,9 +67,9 @@ pub enum FlightMode {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct BlimpState {
     flight_mode: FlightMode,
-    altitude: Option<f64>,
+    altitude: f64,
     desired_altitude: Option<f64>,
-    heading: Option<f64>,
+    heading: f64,
     desired_heading: Option<f64>,
     pitch: f64,
     roll: f64,
@@ -104,10 +104,10 @@ pub struct BlimpMainAlgo {
 
     curr_flight_mode: TRwLock<FlightMode>,
     controls: TRwLock<Controls>,
-    altitude: TRwLock<Option<f64>>,
+    altitude: TRwLock<f64>,
     gps_location: TRwLock<Option<(f64, f64)>>,
     acceleration: TRwLock<Option<(f64, f64, f64)>>,
-    heading: TRwLock<Option<f64>>,
+    heading: TRwLock<f64>,
     pitch_roll: TRwLock<(f64, f64)>,
 
     attitude_pid: TRwLock<PidRegulator<f64>>,
@@ -135,10 +135,10 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     let temperature: f64 = 288.15;
                     let const_coef: f64 = 0.0292718; // R / g / M
                     *self.altitude.write().await =
-                        Some((base_pressure.ln() - press.ln()) * const_coef * temperature);
+                        (base_pressure.ln() - press.ln()) * const_coef * temperature;
                 }
                 BlimpEvent::SensorDataF64(SensorType::MagnetometerHeading, heading) => {
-                    *self.heading.write().await = Some(*heading);
+                    *self.heading.write().await = *heading;
                 }
                 BlimpEvent::SensorDataF64(SensorType::AccelerometerX, acc_x) => {
                     let mut acc_locked = self.acceleration.write().await;
@@ -222,10 +222,10 @@ impl BlimpMainAlgo {
                 yaw: 0.0,
                 desired_flight_mode: FlightMode::Manual,
             }),
-            altitude: TRwLock::new(None),
+            altitude: TRwLock::new(0.0),
             gps_location: TRwLock::new(None),
             acceleration: TRwLock::new(None),
-            heading: TRwLock::new(None),
+            heading: TRwLock::new(0.0),
             pitch_roll: TRwLock::new((0.0, 0.0)),
 
             attitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 0.15, 0.05)),
@@ -242,13 +242,13 @@ impl BlimpMainAlgo {
                 FlightMode::Manual => {}
                 FlightMode::Atti => {
                     self.attitude_pid.write().await.setpoint =
-                        (*self.heading.read().await).unwrap_or(0.0);
+                        *self.heading.read().await;
                 }
                 FlightMode::AltiAtti => {
                     self.attitude_pid.write().await.setpoint =
-                        (*self.heading.read().await).unwrap_or(0.0);
+                        *self.heading.read().await;
                     self.altitude_pid.write().await.setpoint =
-                        (*self.altitude.read().await).unwrap_or(0.0);
+                        *self.altitude.read().await;
                 }
             }
         }
@@ -285,21 +285,13 @@ impl BlimpMainAlgo {
                 let mut attitude_pid = self.attitude_pid.write().await;
                 let heading = self.heading.read().await;
                 attitude_pid.setpoint += controls.yaw as f64 * delta_time;
-                let attitude_pid_result = if let Some(heading) = *heading {
-                    Some(attitude_pid.update(heading.clone(), delta_time))
-                } else {
-                    None
-                };
+                let attitude_pid_result = Some(attitude_pid.update(heading.clone(), delta_time));
 
                 let mut altitude_pid = self.altitude_pid.write().await;
                 let altitude = self.altitude.read().await;
                 let altitude_pid_result = if *curr_flight_mode == FlightMode::AltiAtti {
                     altitude_pid.setpoint += controls.elevation as f64 * delta_time;
-                    if let Some(altitude) = *altitude {
-                        Some(altitude_pid.update(altitude.clone(), delta_time))
-                    } else {
-                        None
-                    }
+                    Some(altitude_pid.update(altitude.clone(), delta_time))
                 } else {
                     None
                 };
