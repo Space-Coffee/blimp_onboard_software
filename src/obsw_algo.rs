@@ -133,7 +133,7 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     // TODO: Allow changing base (sea level) pressure and temperature
                     let base_pressure: f64 = 101325.0;
                     let temperature: f64 = 288.15;
-                    let const_coef: f64 = 0.0292718; // R / g / M
+                    let const_coef: f64 = 29.2718; // R / g / M
                     *self.altitude.write().await =
                         (base_pressure.ln() - press.ln()) * const_coef * temperature;
                 }
