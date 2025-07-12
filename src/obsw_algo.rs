@@ -108,7 +108,7 @@ pub struct BlimpMainAlgo {
     gps_location: TRwLock<Option<(f64, f64)>>,
     acceleration: TRwLock<Option<(f64, f64, f64)>>,
     heading: TRwLock<f64>,
-    pitch_roll: TRwLock<(f64, f64)>,
+    pub pitch_roll: TRwLock<(f64, f64)>,
 
     attitude_pid: TRwLock<PidRegulator<f64>>,
     altitude_pid: TRwLock<PidRegulator<f64>>,
