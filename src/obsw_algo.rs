@@ -20,6 +20,7 @@ pub struct Controls {
     pub roll: f32,                // Roll left/right
     pub yaw: f32,                 // Rotate left/right - change heading
     pub desired_flight_mode: FlightMode,
+    pub motors_toggles: [bool; 4],
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -221,6 +222,7 @@ impl BlimpMainAlgo {
                 roll: 0.0,
                 yaw: 0.0,
                 desired_flight_mode: FlightMode::Manual,
+                motors_toggles: [true; 4],
             }),
             altitude: TRwLock::new(0.0),
             gps_location: TRwLock::new(None),
