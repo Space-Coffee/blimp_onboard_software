@@ -257,6 +257,26 @@ impl BlimpMainAlgo {
         match *curr_flight_mode {
             FlightMode::Manual => {
                 for i in 0..(4 as u8) {
+                    if !controls.motors_toggles[i as usize] {
+                        self.perform_action(BlimpAction::SetMotor {
+                            motor: i,
+                            speed: 0.0,
+                        })
+                        .await;
+                        self.perform_action(BlimpAction::SetServo {
+                            servo: 2 * i,
+                            location: 0.0,
+                        })
+                        .await;
+                        self.perform_action(BlimpAction::SetServo {
+                            servo: 2 * i + 1,
+                            location: 0.0,
+                        })
+                        .await;
+
+                        continue;
+                    }
+
                     let speed: f32 = controls.throttle_main
                         + controls.throttle_split[i as usize]
                         + (if i % 2 == 0 { 1.0 } else { -1.0 }) * controls.yaw;
