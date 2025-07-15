@@ -279,20 +279,23 @@ impl BlimpMainAlgo {
 
                     let speed: f32 = controls.throttle_main
                         + controls.throttle_split[i as usize]
-                        + (if i % 2 == 0 { 1.0 } else { -1.0 }) * controls.yaw;
+                        + controls.yaw * if i % 2 == 0 { 1.0 } else { -1.0 };
                     //Motor
                     self.perform_action(BlimpAction::SetMotor { motor: i, speed })
                         .await;
                     // Up-down servo
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i,
-                        location: controls.elevation * 90.0,
+                        location: (controls.elevation * if i % 2 == 0 { 1.0 } else { -1.0 }
+                            + controls.roll)
+                            .clamp(-1.0, 1.0)
+                            * 90.0,
                     })
                     .await;
                     //Sideways servo
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i + 1,
-                        location: controls.yaw * 90.0,
+                        location: controls.sideways.clamp(-1.0, 1.0) * 90.0,
                     })
                     .await;
                 }
