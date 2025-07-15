@@ -264,21 +264,21 @@ impl BlimpMainAlgo {
             FlightMode::Manual => {
                 for i in 0..(4 as u8) {
                     if !controls.motors_toggles[i as usize] {
-                        self.perform_action(BlimpAction::SetMotor {
-                            motor: i,
-                            speed: 0.0,
-                        })
-                        .await;
-                        self.perform_action(BlimpAction::SetServo {
-                            servo: 2 * i,
-                            location: 0.0,
-                        })
-                        .await;
-                        self.perform_action(BlimpAction::SetServo {
-                            servo: 2 * i + 1,
-                            location: 0.0,
-                        })
-                        .await;
+                        // self.perform_action(BlimpAction::SetMotor {
+                        //     motor: i,
+                        //     speed: 0.0,
+                        // })
+                        // .await;
+                        // self.perform_action(BlimpAction::SetServo {
+                        //     servo: 2 * i,
+                        //     location: 0.0,
+                        // })
+                        // .await;
+                        // self.perform_action(BlimpAction::SetServo {
+                        //     servo: 2 * i + 1,
+                        //     location: 0.0,
+                        // })
+                        // .await;
 
                         continue;
                     }
@@ -296,8 +296,7 @@ impl BlimpMainAlgo {
                     // Up-down servo
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i,
-                        location: (controls.elevation * (if i % 2 == 0 { 1.0 } else { -1.0 })
-                            + controls.roll)
+                        location: (controls.elevation * (if i % 2 == 0 { 1.0 } else { -1.0 }))
                             .clamp(-1.0, 1.0)
                             * 90.0,
                     })
@@ -305,7 +304,9 @@ impl BlimpMainAlgo {
                     //Sideways servo
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i + 1,
-                        location: controls.sideways.clamp(-1.0, 1.0) * 90.0,
+                        location: (controls.roll * (if i % 2 == 0 { 1.0 } else { -1.0 }) + 1.0)
+                            .clamp(-1.0, 1.0)
+                            * 90.0,
                     })
                     .await;
                 }
