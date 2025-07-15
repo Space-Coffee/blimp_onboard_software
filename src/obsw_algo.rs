@@ -22,6 +22,7 @@ pub struct Controls {
     pub desired_flight_mode: FlightMode,
     pub motors_toggles: [bool; 4],
     pub motors_reverse: [bool; 4],
+    pub nav_ligths: bool,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -33,8 +34,10 @@ pub enum BlimpAction {
     // 0 1
     // 2 3
     SetMotor { motor: u8, speed: f32 },
-    SendMsg(Box<MessageB2G>), // This has to be boxed, because otherwise we would have infinitely
-                              // sized struct
+    // This has to be boxed, because otherwise we would have infinitely sized struct
+    SendMsg(Box<MessageB2G>),
+    // Positive number is blink frequency; zero is solid light; negative is off
+    NavLights(f32),
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -225,6 +228,7 @@ impl BlimpMainAlgo {
                 desired_flight_mode: FlightMode::Manual,
                 motors_toggles: [true; 4],
                 motors_reverse: [false; 4],
+                nav_ligths: false,
             }),
             altitude: TRwLock::new(0.0),
             gps_location: TRwLock::new(None),
@@ -364,6 +368,13 @@ impl BlimpMainAlgo {
                 roll: pitch_roll_locked.1,
             },
         ))))
+        .await;
+
+        self.perform_action(BlimpAction::NavLights(if controls.nav_ligths {
+            0.5
+        } else {
+            -1.0
+        }))
         .await;
 
         *self.previous_step_time.write().await = tokio::time::Instant::now();
