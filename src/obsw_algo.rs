@@ -21,6 +21,7 @@ pub struct Controls {
     pub yaw: f32,                 // Rotate left/right - change heading
     pub desired_flight_mode: FlightMode,
     pub motors_toggles: [bool; 4],
+    pub motors_reverse: [bool; 4],
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -223,6 +224,7 @@ impl BlimpMainAlgo {
                 yaw: 0.0,
                 desired_flight_mode: FlightMode::Manual,
                 motors_toggles: [true; 4],
+                motors_reverse: [false; 4],
             }),
             altitude: TRwLock::new(0.0),
             gps_location: TRwLock::new(None),
@@ -277,16 +279,20 @@ impl BlimpMainAlgo {
                         continue;
                     }
 
-                    let speed: f32 = controls.throttle_main
-                        + controls.throttle_split[i as usize]
-                        + controls.yaw * if i % 2 == 0 { 1.0 } else { -1.0 };
+                    let speed: f32 = (controls.throttle_main + controls.throttle_split[i as usize])
+                        * (if controls.motors_reverse[i as usize] {
+                            -1.0
+                        } else {
+                            1.0
+                        })
+                        + controls.yaw * (if i % 2 == 0 { 1.0 } else { -1.0 });
                     //Motor
                     self.perform_action(BlimpAction::SetMotor { motor: i, speed })
                         .await;
                     // Up-down servo
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i,
-                        location: (controls.elevation * if i % 2 == 0 { 1.0 } else { -1.0 }
+                        location: (controls.elevation * (if i % 2 == 0 { 1.0 } else { -1.0 })
                             + controls.roll)
                             .clamp(-1.0, 1.0)
                             * 90.0,
