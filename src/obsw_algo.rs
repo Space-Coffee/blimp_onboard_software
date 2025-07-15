@@ -22,7 +22,7 @@ pub struct Controls {
     pub desired_flight_mode: FlightMode,
     pub motors_toggles: [bool; 4],
     pub motors_reverse: [bool; 4],
-    pub nav_ligths: bool,
+    pub nav_lights: bool,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -228,7 +228,7 @@ impl BlimpMainAlgo {
                 desired_flight_mode: FlightMode::Manual,
                 motors_toggles: [true; 4],
                 motors_reverse: [false; 4],
-                nav_ligths: false,
+                nav_lights: false,
             }),
             altitude: TRwLock::new(0.0),
             gps_location: TRwLock::new(None),
@@ -370,7 +370,7 @@ impl BlimpMainAlgo {
         ))))
         .await;
 
-        self.perform_action(BlimpAction::NavLights(if controls.nav_ligths {
+        self.perform_action(BlimpAction::NavLights(if controls.nav_lights {
             0.5
         } else {
             -1.0
