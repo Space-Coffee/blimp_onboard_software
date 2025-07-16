@@ -20,6 +20,9 @@ pub struct Controls {
     pub roll: f32,                // Roll left/right
     pub yaw: f32,                 // Rotate left/right - change heading
     pub desired_flight_mode: FlightMode,
+    pub motors_toggles: [bool; 4],
+    pub motors_reverse: [bool; 4],
+    pub nav_lights: bool,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -31,8 +34,10 @@ pub enum BlimpAction {
     // 0 1
     // 2 3
     SetMotor { motor: u8, speed: f32 },
-    SendMsg(Box<MessageB2G>), // This has to be boxed, because otherwise we would have infinitely
-                              // sized struct
+    // This has to be boxed, because otherwise we would have infinitely sized struct
+    SendMsg(Box<MessageB2G>),
+    // Positive number is blink frequency; zero is solid light; negative is off
+    NavLights(f32),
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -67,10 +72,12 @@ pub enum FlightMode {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct BlimpState {
     flight_mode: FlightMode,
-    altitude: Option<f64>,
+    altitude: f64,
     desired_altitude: Option<f64>,
-    heading: Option<f64>,
+    heading: f64,
     desired_heading: Option<f64>,
+    pitch: f64,
+    roll: f64,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -102,10 +109,11 @@ pub struct BlimpMainAlgo {
 
     curr_flight_mode: TRwLock<FlightMode>,
     controls: TRwLock<Controls>,
-    altitude: TRwLock<Option<f64>>,
+    altitude: TRwLock<f64>,
     gps_location: TRwLock<Option<(f64, f64)>>,
     acceleration: TRwLock<Option<(f64, f64, f64)>>,
-    heading: TRwLock<Option<f64>>,
+    heading: TRwLock<f64>,
+    pub pitch_roll: TRwLock<(f64, f64)>,
 
     attitude_pid: TRwLock<PidRegulator<f64>>,
     altitude_pid: TRwLock<PidRegulator<f64>>,
@@ -130,27 +138,37 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     // TODO: Allow changing base (sea level) pressure and temperature
                     let base_pressure: f64 = 101325.0;
                     let temperature: f64 = 288.15;
-                    let const_coef: f64 = 0.0292718; // R / g / M
+                    let const_coef: f64 = 29.2718; // R / g / M
                     *self.altitude.write().await =
-                        Some((base_pressure.ln() - press.ln()) * const_coef * temperature);
+                        (base_pressure.ln() - press.ln()) * const_coef * temperature;
                 }
                 BlimpEvent::SensorDataF64(SensorType::MagnetometerHeading, heading) => {
-                    *self.heading.write().await = Some(*heading);
+                    *self.heading.write().await = *heading;
                 }
                 BlimpEvent::SensorDataF64(SensorType::AccelerometerX, acc_x) => {
                     let mut acc_locked = self.acceleration.write().await;
                     let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
-                    *acc_locked = Some((*acc_x, prev_acc.1, prev_acc.2))
+                    *acc_locked = Some((*acc_x, prev_acc.1, prev_acc.2));
                 }
                 BlimpEvent::SensorDataF64(SensorType::AccelerometerY, acc_y) => {
                     let mut acc_locked = self.acceleration.write().await;
                     let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
-                    *acc_locked = Some((prev_acc.0, *acc_y, prev_acc.2))
+                    *acc_locked = Some((prev_acc.0, *acc_y, prev_acc.2));
                 }
                 BlimpEvent::SensorDataF64(SensorType::AccelerometerZ, acc_z) => {
                     let mut acc_locked = self.acceleration.write().await;
                     let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
-                    *acc_locked = Some((prev_acc.0, prev_acc.1, *acc_z))
+                    let acc_new = (prev_acc.0, prev_acc.1, *acc_z);
+                    *acc_locked = Some(acc_new);
+
+                    // See: https://mwrona.com/posts/accel-roll-pitch/
+                    let acc_resultant =
+                        (acc_new.0 * acc_new.0 + acc_new.1 * acc_new.1 + acc_new.2 * acc_new.2)
+                            .sqrt();
+
+                    let pitch = (acc_new.1 / acc_resultant).asin();
+                    let roll = (-acc_new.0).atan2(acc_new.2);
+                    *self.pitch_roll.write().await = (pitch, roll);
                 }
                 BlimpEvent::SensorDataF64(SensorType::GPSLatitude, latitude) => {
                     let prev_long = self.gps_location.read().await.unwrap_or((0.0, 0.0)).1;
@@ -208,11 +226,15 @@ impl BlimpMainAlgo {
                 roll: 0.0,
                 yaw: 0.0,
                 desired_flight_mode: FlightMode::Manual,
+                motors_toggles: [true; 4],
+                motors_reverse: [false; 4],
+                nav_lights: false,
             }),
-            altitude: TRwLock::new(None),
+            altitude: TRwLock::new(0.0),
             gps_location: TRwLock::new(None),
             acceleration: TRwLock::new(None),
-            heading: TRwLock::new(None),
+            heading: TRwLock::new(0.0),
+            pitch_roll: TRwLock::new((0.0, 0.0)),
 
             attitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 0.15, 0.05)),
             altitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 0.15, 0.05)),
@@ -227,14 +249,11 @@ impl BlimpMainAlgo {
             match controls.desired_flight_mode {
                 FlightMode::Manual => {}
                 FlightMode::Atti => {
-                    self.attitude_pid.write().await.setpoint =
-                        (*self.heading.read().await).unwrap_or(0.0);
+                    self.attitude_pid.write().await.setpoint = *self.heading.read().await;
                 }
                 FlightMode::AltiAtti => {
-                    self.attitude_pid.write().await.setpoint =
-                        (*self.heading.read().await).unwrap_or(0.0);
-                    self.altitude_pid.write().await.setpoint =
-                        (*self.altitude.read().await).unwrap_or(0.0);
+                    self.attitude_pid.write().await.setpoint = *self.heading.read().await;
+                    self.altitude_pid.write().await.setpoint = *self.altitude.read().await;
                 }
             }
         }
@@ -244,22 +263,50 @@ impl BlimpMainAlgo {
         match *curr_flight_mode {
             FlightMode::Manual => {
                 for i in 0..(4 as u8) {
-                    let speed: f32 = controls.throttle_main
-                        + controls.throttle_split[i as usize]
-                        + (if i % 2 == 0 { 1.0 } else { -1.0 }) * controls.yaw;
+                    if !controls.motors_toggles[i as usize] {
+                        // self.perform_action(BlimpAction::SetMotor {
+                        //     motor: i,
+                        //     speed: 0.0,
+                        // })
+                        // .await;
+                        // self.perform_action(BlimpAction::SetServo {
+                        //     servo: 2 * i,
+                        //     location: 0.0,
+                        // })
+                        // .await;
+                        // self.perform_action(BlimpAction::SetServo {
+                        //     servo: 2 * i + 1,
+                        //     location: 0.0,
+                        // })
+                        // .await;
+
+                        continue;
+                    }
+
+                    let speed: f32 = (controls.throttle_main + controls.throttle_split[i as usize])
+                        * (if controls.motors_reverse[i as usize] {
+                            -1.0
+                        } else {
+                            1.0
+                        })
+                        + controls.yaw * (if i % 2 == 0 { 1.0 } else { -1.0 });
                     //Motor
                     self.perform_action(BlimpAction::SetMotor { motor: i, speed })
                         .await;
                     // Up-down servo
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i,
-                        location: controls.elevation * 90.0,
+                        location: (controls.elevation * (if i % 2 == 0 { 1.0 } else { -1.0 }))
+                            .clamp(-1.0, 1.0)
+                            * 90.0,
                     })
                     .await;
                     //Sideways servo
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i + 1,
-                        location: controls.yaw * 90.0,
+                        location: (controls.roll * (if i % 2 == 0 { 1.0 } else { -1.0 }) + 1.0)
+                            .clamp(-1.0, 1.0)
+                            * 90.0,
                     })
                     .await;
                 }
@@ -271,21 +318,13 @@ impl BlimpMainAlgo {
                 let mut attitude_pid = self.attitude_pid.write().await;
                 let heading = self.heading.read().await;
                 attitude_pid.setpoint += controls.yaw as f64 * delta_time;
-                let attitude_pid_result = if let Some(heading) = *heading {
-                    Some(attitude_pid.update(heading.clone(), delta_time))
-                } else {
-                    None
-                };
+                let attitude_pid_result = Some(attitude_pid.update(heading.clone(), delta_time));
 
                 let mut altitude_pid = self.altitude_pid.write().await;
                 let altitude = self.altitude.read().await;
                 let altitude_pid_result = if *curr_flight_mode == FlightMode::AltiAtti {
                     altitude_pid.setpoint += controls.elevation as f64 * delta_time;
-                    if let Some(altitude) = *altitude {
-                        Some(altitude_pid.update(altitude.clone(), delta_time))
-                    } else {
-                        None
-                    }
+                    Some(altitude_pid.update(altitude.clone(), delta_time))
                 } else {
                     None
                 };
@@ -308,6 +347,7 @@ impl BlimpMainAlgo {
             }
         }
 
+        let pitch_roll_locked = self.pitch_roll.read().await;
         self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::BlimpState(
             BlimpState {
                 flight_mode: curr_flight_mode.clone(),
@@ -325,8 +365,17 @@ impl BlimpMainAlgo {
                 } else {
                     None
                 },
+                pitch: pitch_roll_locked.0,
+                roll: pitch_roll_locked.1,
             },
         ))))
+        .await;
+
+        self.perform_action(BlimpAction::NavLights(if controls.nav_lights {
+            0.5
+        } else {
+            -1.0
+        }))
         .await;
 
         *self.previous_step_time.write().await = tokio::time::Instant::now();
