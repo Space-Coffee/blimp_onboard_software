@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use nalgebra as na;
 use serde;
+use tokio;
 use tokio::sync::RwLock as TRwLock;
 use tokio::time::Instant;
 
@@ -128,7 +129,10 @@ pub struct BlimpMainAlgo {
 }
 
 impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
-    fn handle_event(&self, ev: BlimpEvent) -> Pin<Box<impl Future<Output = ()>>> {
+    fn handle_event(
+        self: Arc<Self>,
+        ev: BlimpEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> {
         Box::pin(async move {
             let mut inner_state = self.inner_state.write().await;
             match &ev {
@@ -190,7 +194,7 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     }
                     MessageG2B::Pong(_id) => {}
                     MessageG2B::Control(ctrl) => {
-                        self.handle_event(BlimpEvent::Control(ctrl.clone())).await;
+                        tokio::spawn(self.clone().handle_event(BlimpEvent::Control(ctrl.clone())));
                     }
                 },
                 _ => {}
@@ -362,8 +366,15 @@ impl BlimpMainAlgo {
             }
         }
 
+        self.perform_action(BlimpAction::NavLights(if inner_state.controls.nav_lights {
+            0.5
+        } else {
+            -1.0
+        }))
+        .await;
+
         {
-            let pids = self.pids.read().await;
+            let mut pids = self.pids.write().await;
             self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::BlimpState(
                 BlimpState {
                     flight_mode: inner_state.curr_flight_mode.clone(),
@@ -386,16 +397,8 @@ impl BlimpMainAlgo {
                 },
             ))))
             .await;
+            pids.previous_step_time = tokio::time::Instant::now();
         }
-
-        self.perform_action(BlimpAction::NavLights(if inner_state.controls.nav_lights {
-            0.5
-        } else {
-            -1.0
-        }))
-        .await;
-
-        self.pids.write().await.previous_step_time = tokio::time::Instant::now();
     }
 
     async fn perform_action(&self, action: BlimpAction) {
