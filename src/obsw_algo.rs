@@ -96,6 +96,11 @@ pub enum MessageB2G {
     BlimpState(BlimpState),
 }
 
+pub struct BlimpPids {
+    attitude_pid: PidRegulator<f64>,
+    altitude_pid: PidRegulator<f64>,
+}
+
 pub struct BlimpMainAlgo {
     action_callback: TRwLock<
         Option<
@@ -115,8 +120,7 @@ pub struct BlimpMainAlgo {
     heading: TRwLock<f64>,
     pub pitch_roll: TRwLock<(f64, f64)>,
 
-    attitude_pid: TRwLock<PidRegulator<f64>>,
-    altitude_pid: TRwLock<PidRegulator<f64>>,
+    pids: TRwLock<BlimpPids>,
     previous_step_time: TRwLock<Instant>,
 }
 
@@ -236,8 +240,10 @@ impl BlimpMainAlgo {
             heading: TRwLock::new(0.0),
             pitch_roll: TRwLock::new((0.0, 0.0)),
 
-            attitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 0.15, 0.05)),
-            altitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 0.15, 0.05)),
+            pids: TRwLock::new(BlimpPids {
+                attitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 0.05),
+                altitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 0.05),
+            }),
             previous_step_time: TRwLock::new(Instant::now()),
         }
     }
@@ -249,11 +255,12 @@ impl BlimpMainAlgo {
             match controls.desired_flight_mode {
                 FlightMode::Manual => {}
                 FlightMode::Atti => {
-                    self.attitude_pid.write().await.setpoint = *self.heading.read().await;
+                    self.pids.write().await.attitude_pid.setpoint = *self.heading.read().await;
                 }
                 FlightMode::AltiAtti => {
-                    self.attitude_pid.write().await.setpoint = *self.heading.read().await;
-                    self.altitude_pid.write().await.setpoint = *self.altitude.read().await;
+                    let mut pids = self.pids.write().await;
+                    pids.attitude_pid.setpoint = *self.heading.read().await;
+                    pids.altitude_pid.setpoint = *self.altitude.read().await;
                 }
             }
         }
@@ -314,25 +321,27 @@ impl BlimpMainAlgo {
             FlightMode::Atti | FlightMode::AltiAtti => {
                 let previous_step_time = self.previous_step_time.read().await;
                 let delta_time = (tokio::time::Instant::now() - *previous_step_time).as_secs_f64();
+                let mut pids = self.pids.write().await;
 
-                let mut attitude_pid = self.attitude_pid.write().await;
                 let heading = self.heading.read().await;
-                attitude_pid.setpoint += controls.yaw as f64 * delta_time;
-                let attitude_pid_result = Some(attitude_pid.update(heading.clone(), delta_time));
+                pids.attitude_pid.setpoint += 0.25 * controls.yaw as f64 * delta_time;
+                let attitude_pid_result =
+                    Some(pids.attitude_pid.update(heading.clone(), delta_time));
 
-                let mut altitude_pid = self.altitude_pid.write().await;
                 let altitude = self.altitude.read().await;
                 let altitude_pid_result = if *curr_flight_mode == FlightMode::AltiAtti {
-                    altitude_pid.setpoint += controls.elevation as f64 * delta_time;
-                    Some(altitude_pid.update(altitude.clone(), delta_time))
+                    pids.altitude_pid.setpoint += 0.5 * controls.elevation as f64 * delta_time;
+                    Some(pids.altitude_pid.update(altitude.clone(), delta_time))
                 } else {
                     None
                 };
 
                 let mut mdfv = na::Vector3::<f64>::zeros();
                 let mut lrfvs = Vec::<na::Vector3<f64>>::new();
-                for _ in 0..4 {
+                for i in 0..4 {
                     lrfvs.push(na::Vector3::<f64>::zeros());
+                    lrfvs[i].y +=
+                        attitude_pid_result.unwrap_or(0.0) * (if i % 2 == 0 { 1.0 } else { -1.0 });
                 }
 
                 mdfv.x += controls.sideways as f64;
@@ -348,12 +357,13 @@ impl BlimpMainAlgo {
         }
 
         let pitch_roll_locked = self.pitch_roll.read().await;
+        let pids = self.pids.read().await;
         self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::BlimpState(
             BlimpState {
                 flight_mode: curr_flight_mode.clone(),
                 altitude: *self.altitude.read().await,
                 desired_altitude: if *curr_flight_mode == FlightMode::AltiAtti {
-                    Some(self.altitude_pid.read().await.setpoint)
+                    Some(pids.altitude_pid.setpoint)
                 } else {
                     None
                 },
@@ -361,7 +371,7 @@ impl BlimpMainAlgo {
                 desired_heading: if *curr_flight_mode == FlightMode::Atti
                     || *curr_flight_mode == FlightMode::AltiAtti
                 {
-                    Some(self.attitude_pid.read().await.setpoint)
+                    Some(pids.attitude_pid.setpoint)
                 } else {
                     None
                 },
