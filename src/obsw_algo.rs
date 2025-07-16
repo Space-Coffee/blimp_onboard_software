@@ -319,8 +319,8 @@ impl BlimpMainAlgo {
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i + 1,
                         location: (inner_state.controls.roll
-                            * (if i % 2 == 0 { 1.0 } else { -1.0 })
-                            + 1.0)
+                            * (if i % 2 == 0 { -1.0 } else { 1.0 })
+                            + (if i % 2 == 0 { -1.0 } else { -1.0 }))
                             .clamp(-1.0, 1.0)
                             * 90.0,
                     })
