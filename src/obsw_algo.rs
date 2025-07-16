@@ -257,8 +257,7 @@ impl BlimpMainAlgo {
             match inner_state.controls.desired_flight_mode {
                 FlightMode::Manual => {}
                 FlightMode::Atti => {
-                    self.pids.write().await.attitude_pid.setpoint =
-                        *inner_state.heading.read().await;
+                    self.pids.write().await.attitude_pid.setpoint = inner_state.heading;
                 }
                 FlightMode::AltiAtti => {
                     let mut pids = self.pids.write().await;
