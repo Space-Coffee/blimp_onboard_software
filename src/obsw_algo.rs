@@ -209,7 +209,7 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
     }
 
     fn set_action_callback(
-        &mut self,
+        &self,
         callback: Arc<
             dyn Fn(BlimpAction) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync,
         >,

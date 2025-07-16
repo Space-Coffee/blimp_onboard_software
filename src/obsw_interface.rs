@@ -8,7 +8,7 @@ pub trait BlimpAlgorithm<EventType, ActionType> {
         ev: EventType,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>>;
     fn set_action_callback(
-        &mut self,
+        &self,
         callback: Arc<
             dyn Fn(ActionType) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync,
         >,
