@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use nalgebra as na;
 use serde;
+use tokio;
 use tokio::sync::RwLock as TRwLock;
 use tokio::time::Instant;
 
@@ -96,6 +97,22 @@ pub enum MessageB2G {
     BlimpState(BlimpState),
 }
 
+pub struct BlimpInnerState {
+    curr_flight_mode: FlightMode,
+    controls: Controls,
+    altitude: f64,
+    gps_location: Option<(f64, f64)>,
+    acceleration: Option<(f64, f64, f64)>,
+    heading: f64,
+    pub pitch_roll: (f64, f64),
+}
+
+struct BlimpPids {
+    attitude_pid: PidRegulator<f64>,
+    altitude_pid: PidRegulator<f64>,
+    previous_step_time: Instant,
+}
+
 pub struct BlimpMainAlgo {
     action_callback: TRwLock<
         Option<
@@ -107,25 +124,20 @@ pub struct BlimpMainAlgo {
         >,
     >,
 
-    curr_flight_mode: TRwLock<FlightMode>,
-    controls: TRwLock<Controls>,
-    altitude: TRwLock<f64>,
-    gps_location: TRwLock<Option<(f64, f64)>>,
-    acceleration: TRwLock<Option<(f64, f64, f64)>>,
-    heading: TRwLock<f64>,
-    pub pitch_roll: TRwLock<(f64, f64)>,
-
-    attitude_pid: TRwLock<PidRegulator<f64>>,
-    altitude_pid: TRwLock<PidRegulator<f64>>,
-    previous_step_time: TRwLock<Instant>,
+    pub inner_state: TRwLock<BlimpInnerState>,
+    pids: TRwLock<BlimpPids>,
 }
 
 impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
-    fn handle_event(&self, ev: BlimpEvent) -> Pin<Box<impl Future<Output = ()>>> {
+    fn handle_event(
+        self: Arc<Self>,
+        ev: BlimpEvent,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> {
         Box::pin(async move {
+            let mut inner_state = self.inner_state.write().await;
             match &ev {
                 BlimpEvent::Control(ctrl) => {
-                    *self.controls.write().await = ctrl.clone();
+                    inner_state.controls = ctrl.clone();
                 }
                 BlimpEvent::SensorDataF64(SensorType::Barometer, press) => {
                     // Compute altitude
@@ -139,27 +151,24 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     let base_pressure: f64 = 101325.0;
                     let temperature: f64 = 288.15;
                     let const_coef: f64 = 29.2718; // R / g / M
-                    *self.altitude.write().await =
+                    inner_state.altitude =
                         (base_pressure.ln() - press.ln()) * const_coef * temperature;
                 }
                 BlimpEvent::SensorDataF64(SensorType::MagnetometerHeading, heading) => {
-                    *self.heading.write().await = *heading;
+                    inner_state.heading = *heading;
                 }
                 BlimpEvent::SensorDataF64(SensorType::AccelerometerX, acc_x) => {
-                    let mut acc_locked = self.acceleration.write().await;
-                    let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
-                    *acc_locked = Some((*acc_x, prev_acc.1, prev_acc.2));
+                    let prev_acc = inner_state.acceleration.unwrap_or((0.0, 0.0, 0.0));
+                    inner_state.acceleration = Some((*acc_x, prev_acc.1, prev_acc.2));
                 }
                 BlimpEvent::SensorDataF64(SensorType::AccelerometerY, acc_y) => {
-                    let mut acc_locked = self.acceleration.write().await;
-                    let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
-                    *acc_locked = Some((prev_acc.0, *acc_y, prev_acc.2));
+                    let prev_acc = inner_state.acceleration.unwrap_or((0.0, 0.0, 0.0));
+                    inner_state.acceleration = Some((prev_acc.0, *acc_y, prev_acc.2));
                 }
                 BlimpEvent::SensorDataF64(SensorType::AccelerometerZ, acc_z) => {
-                    let mut acc_locked = self.acceleration.write().await;
-                    let prev_acc = acc_locked.unwrap_or((0.0, 0.0, 0.0));
+                    let prev_acc = inner_state.acceleration.unwrap_or((0.0, 0.0, 0.0));
                     let acc_new = (prev_acc.0, prev_acc.1, *acc_z);
-                    *acc_locked = Some(acc_new);
+                    inner_state.acceleration = Some(acc_new);
 
                     // See: https://mwrona.com/posts/accel-roll-pitch/
                     let acc_resultant =
@@ -168,15 +177,15 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
 
                     let pitch = (acc_new.1 / acc_resultant).asin();
                     let roll = (-acc_new.0).atan2(acc_new.2);
-                    *self.pitch_roll.write().await = (pitch, roll);
+                    inner_state.pitch_roll = (pitch, roll);
                 }
                 BlimpEvent::SensorDataF64(SensorType::GPSLatitude, latitude) => {
-                    let prev_long = self.gps_location.read().await.unwrap_or((0.0, 0.0)).1;
-                    *self.gps_location.write().await = Some((*latitude, prev_long));
+                    let prev_long = inner_state.gps_location.unwrap_or((0.0, 0.0)).1;
+                    inner_state.gps_location = Some((*latitude, prev_long));
                 }
                 BlimpEvent::SensorDataF64(SensorType::GPSLongitude, longitude) => {
-                    let prev_lat = self.gps_location.read().await.unwrap_or((0.0, 0.0)).0;
-                    *self.gps_location.write().await = Some((prev_lat, *longitude));
+                    let prev_lat = inner_state.gps_location.unwrap_or((0.0, 0.0)).0;
+                    inner_state.gps_location = Some((prev_lat, *longitude));
                 }
                 BlimpEvent::GetMsg(msg) => match msg {
                     MessageG2B::Ping(id) => {
@@ -185,7 +194,7 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     }
                     MessageG2B::Pong(_id) => {}
                     MessageG2B::Control(ctrl) => {
-                        self.handle_event(BlimpEvent::Control(ctrl.clone())).await;
+                        tokio::spawn(self.clone().handle_event(BlimpEvent::Control(ctrl.clone())));
                     }
                 },
                 _ => {}
@@ -200,7 +209,7 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
     }
 
     fn set_action_callback(
-        &mut self,
+        &self,
         callback: Arc<
             dyn Fn(BlimpAction) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync,
         >,
@@ -216,54 +225,57 @@ impl BlimpMainAlgo {
         Self {
             action_callback: TRwLock::new(None),
 
-            curr_flight_mode: TRwLock::new(FlightMode::Manual),
-            controls: TRwLock::new(Controls {
-                throttle_main: 0.0,
-                throttle_split: [0.0, 0.0, 0.0, 0.0],
-                sideways: 0.0,
-                elevation: 0.0,
-                pitch: 0.0,
-                roll: 0.0,
-                yaw: 0.0,
-                desired_flight_mode: FlightMode::Manual,
-                motors_toggles: [true; 4],
-                motors_reverse: [false; 4],
-                nav_lights: false,
+            inner_state: TRwLock::new(BlimpInnerState {
+                curr_flight_mode: FlightMode::Manual,
+                controls: Controls {
+                    throttle_main: 0.0,
+                    throttle_split: [0.0, 0.0, 0.0, 0.0],
+                    sideways: 0.0,
+                    elevation: 0.0,
+                    pitch: 0.0,
+                    roll: 0.0,
+                    yaw: 0.0,
+                    desired_flight_mode: FlightMode::Manual,
+                    motors_toggles: [true; 4],
+                    motors_reverse: [false; 4],
+                    nav_lights: false,
+                },
+                altitude: 0.0,
+                gps_location: None,
+                acceleration: None,
+                heading: 0.0,
+                pitch_roll: (0.0, 0.0),
             }),
-            altitude: TRwLock::new(0.0),
-            gps_location: TRwLock::new(None),
-            acceleration: TRwLock::new(None),
-            heading: TRwLock::new(0.0),
-            pitch_roll: TRwLock::new((0.0, 0.0)),
 
-            attitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 0.15, 0.05)),
-            altitude_pid: TRwLock::new(PidRegulator::new(0.0, 1.0, 0.15, 0.05)),
-            previous_step_time: TRwLock::new(Instant::now()),
+            pids: TRwLock::new(BlimpPids {
+                attitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 0.05),
+                altitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 0.05),
+                previous_step_time: Instant::now(),
+            }),
         }
     }
 
     pub async fn step(&self) {
-        let mut curr_flight_mode = self.curr_flight_mode.write().await;
-        let controls = self.controls.read().await;
-        if *curr_flight_mode != controls.desired_flight_mode {
-            match controls.desired_flight_mode {
+        let mut inner_state = self.inner_state.write().await;
+        if inner_state.curr_flight_mode != inner_state.controls.desired_flight_mode {
+            match inner_state.controls.desired_flight_mode {
                 FlightMode::Manual => {}
                 FlightMode::Atti => {
-                    self.attitude_pid.write().await.setpoint = *self.heading.read().await;
+                    self.pids.write().await.attitude_pid.setpoint = inner_state.heading;
                 }
                 FlightMode::AltiAtti => {
-                    self.attitude_pid.write().await.setpoint = *self.heading.read().await;
-                    self.altitude_pid.write().await.setpoint = *self.altitude.read().await;
+                    let mut pids = self.pids.write().await;
+                    pids.attitude_pid.setpoint = inner_state.heading;
+                    pids.altitude_pid.setpoint = inner_state.altitude;
                 }
             }
         }
-        *curr_flight_mode = controls.desired_flight_mode.clone();
+        inner_state.curr_flight_mode = inner_state.controls.desired_flight_mode.clone();
 
-        let curr_flight_mode = curr_flight_mode.downgrade();
-        match *curr_flight_mode {
+        match inner_state.curr_flight_mode {
             FlightMode::Manual => {
                 for i in 0..(4 as u8) {
-                    if !controls.motors_toggles[i as usize] {
+                    if !inner_state.controls.motors_toggles[i as usize] {
                         // self.perform_action(BlimpAction::SetMotor {
                         //     motor: i,
                         //     speed: 0.0,
@@ -283,28 +295,32 @@ impl BlimpMainAlgo {
                         continue;
                     }
 
-                    let speed: f32 = (controls.throttle_main + controls.throttle_split[i as usize])
-                        * (if controls.motors_reverse[i as usize] {
+                    let speed: f32 = (inner_state.controls.throttle_main
+                        + inner_state.controls.throttle_split[i as usize])
+                        * (if inner_state.controls.motors_reverse[i as usize] {
                             -1.0
                         } else {
                             1.0
                         })
-                        + controls.yaw * (if i % 2 == 0 { 1.0 } else { -1.0 });
+                        + inner_state.controls.yaw * (if i % 2 == 0 { 1.0 } else { -1.0 });
                     //Motor
                     self.perform_action(BlimpAction::SetMotor { motor: i, speed })
                         .await;
                     // Up-down servo
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i,
-                        location: (controls.elevation * (if i % 2 == 0 { 1.0 } else { -1.0 }))
-                            .clamp(-1.0, 1.0)
+                        location: (inner_state.controls.elevation
+                            * (if i % 2 == 0 { 1.0 } else { -1.0 }))
+                        .clamp(-1.0, 1.0)
                             * 90.0,
                     })
                     .await;
                     //Sideways servo
                     self.perform_action(BlimpAction::SetServo {
                         servo: 2 * i + 1,
-                        location: (controls.roll * (if i % 2 == 0 { 1.0 } else { -1.0 }) + 1.0)
+                        location: (inner_state.controls.roll
+                            * (if i % 2 == 0 { -1.0 } else { 1.0 })
+                            + (if i % 2 == 0 { -1.0 } else { -1.0 }))
                             .clamp(-1.0, 1.0)
                             * 90.0,
                     })
@@ -312,73 +328,77 @@ impl BlimpMainAlgo {
                 }
             }
             FlightMode::Atti | FlightMode::AltiAtti => {
-                let previous_step_time = self.previous_step_time.read().await;
-                let delta_time = (tokio::time::Instant::now() - *previous_step_time).as_secs_f64();
+                let mut pids = self.pids.write().await;
+                let delta_time =
+                    (tokio::time::Instant::now() - pids.previous_step_time).as_secs_f64();
 
-                let mut attitude_pid = self.attitude_pid.write().await;
-                let heading = self.heading.read().await;
-                attitude_pid.setpoint += controls.yaw as f64 * delta_time;
-                let attitude_pid_result = Some(attitude_pid.update(heading.clone(), delta_time));
+                let heading = inner_state.heading;
+                pids.attitude_pid.setpoint += 0.25 * inner_state.controls.yaw as f64 * delta_time;
+                let attitude_pid_result =
+                    Some(pids.attitude_pid.update(heading.clone(), delta_time));
 
-                let mut altitude_pid = self.altitude_pid.write().await;
-                let altitude = self.altitude.read().await;
-                let altitude_pid_result = if *curr_flight_mode == FlightMode::AltiAtti {
-                    altitude_pid.setpoint += controls.elevation as f64 * delta_time;
-                    Some(altitude_pid.update(altitude.clone(), delta_time))
+                let altitude = inner_state.altitude;
+                let altitude_pid_result = if inner_state.curr_flight_mode == FlightMode::AltiAtti {
+                    pids.altitude_pid.setpoint +=
+                        0.5 * inner_state.controls.elevation as f64 * delta_time;
+                    Some(pids.altitude_pid.update(altitude.clone(), delta_time))
                 } else {
                     None
                 };
 
                 let mut mdfv = na::Vector3::<f64>::zeros();
                 let mut lrfvs = Vec::<na::Vector3<f64>>::new();
-                for _ in 0..4 {
+                for i in 0..4 {
                     lrfvs.push(na::Vector3::<f64>::zeros());
+                    lrfvs[i].y +=
+                        attitude_pid_result.unwrap_or(0.0) * (if i % 2 == 0 { 1.0 } else { -1.0 });
                 }
 
-                mdfv.x += controls.sideways as f64;
-                mdfv.y += controls.throttle_main as f64;
+                mdfv.x += inner_state.controls.sideways as f64;
+                mdfv.y += inner_state.controls.throttle_main as f64;
                 mdfv.z += if let Some(altitude_pid_result) = altitude_pid_result {
                     altitude_pid_result
                 } else {
-                    controls.elevation as f64
+                    inner_state.controls.elevation as f64
                 };
 
                 self.vectored_thrust(mdfv, &lrfvs).await;
             }
         }
 
-        let pitch_roll_locked = self.pitch_roll.read().await;
-        self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::BlimpState(
-            BlimpState {
-                flight_mode: curr_flight_mode.clone(),
-                altitude: *self.altitude.read().await,
-                desired_altitude: if *curr_flight_mode == FlightMode::AltiAtti {
-                    Some(self.altitude_pid.read().await.setpoint)
-                } else {
-                    None
-                },
-                heading: *self.heading.read().await,
-                desired_heading: if *curr_flight_mode == FlightMode::Atti
-                    || *curr_flight_mode == FlightMode::AltiAtti
-                {
-                    Some(self.attitude_pid.read().await.setpoint)
-                } else {
-                    None
-                },
-                pitch: pitch_roll_locked.0,
-                roll: pitch_roll_locked.1,
-            },
-        ))))
-        .await;
-
-        self.perform_action(BlimpAction::NavLights(if controls.nav_lights {
+        self.perform_action(BlimpAction::NavLights(if inner_state.controls.nav_lights {
             0.5
         } else {
             -1.0
         }))
         .await;
 
-        *self.previous_step_time.write().await = tokio::time::Instant::now();
+        {
+            let mut pids = self.pids.write().await;
+            self.perform_action(BlimpAction::SendMsg(Box::new(MessageB2G::BlimpState(
+                BlimpState {
+                    flight_mode: inner_state.curr_flight_mode.clone(),
+                    altitude: inner_state.altitude,
+                    desired_altitude: if inner_state.curr_flight_mode == FlightMode::AltiAtti {
+                        Some(pids.altitude_pid.setpoint)
+                    } else {
+                        None
+                    },
+                    heading: inner_state.heading,
+                    desired_heading: if inner_state.curr_flight_mode == FlightMode::Atti
+                        || inner_state.curr_flight_mode == FlightMode::AltiAtti
+                    {
+                        Some(pids.attitude_pid.setpoint)
+                    } else {
+                        None
+                    },
+                    pitch: inner_state.pitch_roll.0,
+                    roll: inner_state.pitch_roll.1,
+                },
+            ))))
+            .await;
+            pids.previous_step_time = tokio::time::Instant::now();
+        }
     }
 
     async fn perform_action(&self, action: BlimpAction) {
