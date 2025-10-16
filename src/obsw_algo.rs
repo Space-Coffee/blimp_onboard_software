@@ -110,6 +110,8 @@ pub struct BlimpInnerState {
 struct BlimpPids {
     attitude_pid: PidRegulator<f64>,
     altitude_pid: PidRegulator<f64>,
+    pitch_pid: PidRegulator<f64>,
+    roll_pid: PidRegulator<f64>,
     previous_step_time: Instant,
 }
 
@@ -250,6 +252,8 @@ impl BlimpMainAlgo {
             pids: TRwLock::new(BlimpPids {
                 attitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 0.05),
                 altitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 0.05),
+                pitch_pid: PidRegulator::new(0.0, 1.0, 0.15, 0.05),
+                roll_pid: PidRegulator::new(0.0, 1.0, 0.15, 0.05),
                 previous_step_time: Instant::now(),
             }),
         }
@@ -321,7 +325,7 @@ impl BlimpMainAlgo {
                         location: (inner_state.controls.roll
                             * (if i % 2 == 0 { -1.0 } else { 1.0 })
                             + (if i % 2 == 0 { -1.0 } else { -1.0 }))
-                            .clamp(-1.0, 1.0)
+                        .clamp(-1.0, 1.0)
                             * 90.0,
                     })
                     .await;
@@ -346,12 +350,21 @@ impl BlimpMainAlgo {
                     None
                 };
 
+                pids.pitch_pid.setpoint = 0.0;
+                let pitch_result = pids.pitch_pid.update(inner_state.pitch_roll.0, delta_time);
+
+                pids.roll_pid.setpoint = 0.0;
+                let roll_result = pids.roll_pid.update(inner_state.pitch_roll.0, delta_time);
+
                 let mut mdfv = na::Vector3::<f64>::zeros();
                 let mut lrfvs = Vec::<na::Vector3<f64>>::new();
                 for i in 0..4 {
                     lrfvs.push(na::Vector3::<f64>::zeros());
-                    lrfvs[i].y +=
-                        attitude_pid_result.unwrap_or(0.0) * (if i % 2 == 0 { 1.0 } else { -1.0 });
+                    // lrfvs[i].z += 0.2;
+                    // lrfvs[i].y +=
+                    //     attitude_pid_result.unwrap_or(0.0) * (if i % 2 == 0 { 1.0 } else { -1.0 });
+                    // lrfvs[i].z += pitch_result * (if i >= 2 { 1.0 } else { -1.0 });
+                    // lrfvs[i].z += roll_result * (if i % 2 == 0 { 1.0 } else { -1.0 });
                 }
 
                 mdfv.x += inner_state.controls.sideways as f64;
@@ -434,19 +447,27 @@ impl BlimpMainAlgo {
             let lfv_x = lfvs[i].x;
             let lfv_y = lfvs[i].y;
             let lfv_z = lfvs[i].z;
+            let lfv_xz = (f64::powf(lfv_x, 2.0) + f64::powf(lfv_z, 2.0)).sqrt();
             let lfv_hor = (f64::powf(lfv_x, 2.0) + f64::powf(lfv_y, 2.0)).sqrt();
             let lfv_magn =
                 (f64::powf(lfv_x, 2.0) + f64::powf(lfv_y, 2.0) + f64::powf(lfv_z, 2.0)).sqrt();
 
+            let servo_1_angle = f64::atan2(lfv_z, lfv_y) * 180.0 / std::f64::consts::PI;
             self.perform_action(BlimpAction::SetServo {
                 servo: 2 * i as u8,
-                location: (f64::atan2(lfv_z, lfv_hor) * 180.0 / std::f64::consts::PI) as f32,
+                location: servo_1_angle as f32,
             })
             .await;
             // Sideways servo
             self.perform_action(BlimpAction::SetServo {
                 servo: (2 * i + 1) as u8,
-                location: (f64::atan2(lfv_y, lfv_x) * 180.0 / std::f64::consts::PI) as f32,
+                location: (f64::atan2(
+                    lfv_xz
+                        /* * (if servo_1_angle < 0.0 { -1.0 } else { 1.0 }) */
+                        * (if i % 2 == 0 { 1.0 } else { -1.0 }),
+                    lfv_y,
+                ) * 180.0
+                    / std::f64::consts::PI) as f32,
             })
             .await;
 
