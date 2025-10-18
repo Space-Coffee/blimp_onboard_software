@@ -544,9 +544,9 @@ name = "blimp_comm"
 version = "0.2.0"
 
 [[patch.unused]]
-name = "physsim"
-version = "0.1.0"
-
-[[patch.unused]]
 name = "blimp_ground_ws_interface"
 version = "1.0.0"
+
+[[patch.unused]]
+name = "physsim"
+version = "0.1.0"

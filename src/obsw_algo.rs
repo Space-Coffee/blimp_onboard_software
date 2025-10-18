@@ -250,10 +250,10 @@ impl BlimpMainAlgo {
             }),
 
             pids: TRwLock::new(BlimpPids {
-                attitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0),
-                altitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0),
-                pitch_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0),
-                roll_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0),
+                attitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0, Some(std::f64::consts::PI)),
+                altitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0, None),
+                pitch_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0, Some(std::f64::consts::PI)),
+                roll_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0, Some(std::f64::consts::PI)),
                 previous_step_time: Instant::now(),
             }),
         }
