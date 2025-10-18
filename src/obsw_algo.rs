@@ -354,17 +354,19 @@ impl BlimpMainAlgo {
                 let pitch_result = pids.pitch_pid.update(inner_state.pitch_roll.0, delta_time);
 
                 pids.roll_pid.setpoint = 0.0;
-                let roll_result = pids.roll_pid.update(inner_state.pitch_roll.0, delta_time);
+                let roll_result = pids.roll_pid.update(inner_state.pitch_roll.1, delta_time);
 
                 let mut mdfv = na::Vector3::<f64>::zeros();
                 let mut lrfvs = Vec::<na::Vector3<f64>>::new();
                 for i in 0..4 {
                     lrfvs.push(na::Vector3::<f64>::zeros());
+                    lrfvs[i].y +=
+                        inner_state.controls.yaw as f64 * (if i % 2 == 0 { 1.0 } else { -1.0 });
                     // lrfvs[i].z += 0.2;
                     // lrfvs[i].y +=
                     //     attitude_pid_result.unwrap_or(0.0) * (if i % 2 == 0 { 1.0 } else { -1.0 });
-                    // lrfvs[i].z += pitch_result * (if i >= 2 { 1.0 } else { -1.0 });
-                    // lrfvs[i].z += roll_result * (if i % 2 == 0 { 1.0 } else { -1.0 });
+                    lrfvs[i].z += pitch_result * (if i >= 2 { -1.0 } else { 1.0 });
+                    lrfvs[i].z += roll_result * (if i % 2 == 0 { 1.0 } else { -1.0 });
                 }
 
                 mdfv.x += inner_state.controls.sideways as f64;
