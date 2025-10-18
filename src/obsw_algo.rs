@@ -448,11 +448,14 @@ impl BlimpMainAlgo {
             let lfv_y = lfvs[i].y;
             let lfv_z = lfvs[i].z;
             let lfv_xz = (f64::powf(lfv_x, 2.0) + f64::powf(lfv_z, 2.0)).sqrt();
+            let lfv_yz = (f64::powf(lfv_y, 2.0) + f64::powf(lfv_z, 2.0)).sqrt();
             let lfv_hor = (f64::powf(lfv_x, 2.0) + f64::powf(lfv_y, 2.0)).sqrt();
             let lfv_magn =
                 (f64::powf(lfv_x, 2.0) + f64::powf(lfv_y, 2.0) + f64::powf(lfv_z, 2.0)).sqrt();
 
-            let servo_1_angle = f64::atan2(lfv_z, lfv_y) * 180.0 / std::f64::consts::PI;
+            let servo_1_angle =
+                f64::atan2(lfv_z, lfv_y) * (if i % 2 == 0 { -1.0 } else { 1.0 }) * 180.0
+                    / std::f64::consts::PI;
             self.perform_action(BlimpAction::SetServo {
                 servo: 2 * i as u8,
                 location: servo_1_angle as f32,
@@ -462,10 +465,10 @@ impl BlimpMainAlgo {
             self.perform_action(BlimpAction::SetServo {
                 servo: (2 * i + 1) as u8,
                 location: (f64::atan2(
-                    lfv_xz
+                    lfv_yz
                         /* * (if servo_1_angle < 0.0 { -1.0 } else { 1.0 }) */
-                        * (if i % 2 == 0 { 1.0 } else { -1.0 }),
-                    lfv_y,
+                        * (if i % 2 == 0 { -1.0 } else { -1.0 }),
+                    lfv_x,
                 ) * 180.0
                     / std::f64::consts::PI) as f32,
             })
