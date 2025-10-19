@@ -337,7 +337,7 @@ impl BlimpMainAlgo {
                     (tokio::time::Instant::now() - pids.previous_step_time).as_secs_f64();
 
                 let heading = inner_state.heading;
-                pids.attitude_pid.setpoint += 0.25 * inner_state.controls.yaw as f64 * delta_time;
+                pids.attitude_pid.setpoint -= 1.5 * inner_state.controls.yaw as f64 * delta_time;
                 let attitude_pid_result =
                     Some(pids.attitude_pid.update(heading.clone(), delta_time));
 
@@ -360,11 +360,11 @@ impl BlimpMainAlgo {
                 let mut lrfvs = Vec::<na::Vector3<f64>>::new();
                 for i in 0..4 {
                     lrfvs.push(na::Vector3::<f64>::zeros());
-                    lrfvs[i].y +=
-                        inner_state.controls.yaw as f64 * (if i % 2 == 0 { 1.0 } else { -1.0 });
-                    // lrfvs[i].z += 0.2;
                     // lrfvs[i].y +=
-                    //     attitude_pid_result.unwrap_or(0.0) * (if i % 2 == 0 { 1.0 } else { -1.0 });
+                    //     inner_state.controls.yaw as f64 * (if i % 2 == 0 { 1.0 } else { -1.0 });
+                    // lrfvs[i].z += 0.2;
+                    lrfvs[i].y +=
+                        attitude_pid_result.unwrap_or(0.0) * (if i % 2 == 0 { -1.0 } else { 1.0 });
                     lrfvs[i].z += pitch_result * (if i >= 2 { -1.0 } else { 1.0 });
                     lrfvs[i].z += roll_result * (if i % 2 == 0 { 1.0 } else { -1.0 });
                 }
@@ -455,9 +455,23 @@ impl BlimpMainAlgo {
             let lfv_magn =
                 (f64::powf(lfv_x, 2.0) + f64::powf(lfv_y, 2.0) + f64::powf(lfv_z, 2.0)).sqrt();
 
-            let servo_1_angle =
+            let mut servo_1_angle =
                 f64::atan2(lfv_z, lfv_y) * (if i % 2 == 0 { -1.0 } else { 1.0 }) * 180.0
                     / std::f64::consts::PI;
+            let mut servo_2_angle = f64::atan2(
+                lfv_yz
+                        /* * (if servo_1_angle < 0.0 { -1.0 } else { 1.0 }) */
+                        * (if i % 2 == 0 { -1.0 } else { -1.0 }),
+                lfv_x,
+            ) * 180.0
+                / std::f64::consts::PI;
+            if servo_1_angle < -90.0 {
+                servo_1_angle += 90.0;
+                servo_2_angle *= -1.0;
+            } else if servo_1_angle > 90.0 {
+                servo_1_angle -= 90.0;
+                servo_2_angle *= -1.0;
+            }
             self.perform_action(BlimpAction::SetServo {
                 servo: 2 * i as u8,
                 location: servo_1_angle as f32,
@@ -466,13 +480,7 @@ impl BlimpMainAlgo {
             // Sideways servo
             self.perform_action(BlimpAction::SetServo {
                 servo: (2 * i + 1) as u8,
-                location: (f64::atan2(
-                    lfv_yz
-                        /* * (if servo_1_angle < 0.0 { -1.0 } else { 1.0 }) */
-                        * (if i % 2 == 0 { -1.0 } else { -1.0 }),
-                    lfv_x,
-                ) * 180.0
-                    / std::f64::consts::PI) as f32,
+                location: servo_2_angle as f32,
             })
             .await;
 
