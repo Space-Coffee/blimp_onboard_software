@@ -337,14 +337,14 @@ impl BlimpMainAlgo {
                     (tokio::time::Instant::now() - pids.previous_step_time).as_secs_f64();
 
                 let heading = inner_state.heading;
-                pids.attitude_pid.setpoint += 0.25 * inner_state.controls.yaw as f64 * delta_time;
+                pids.attitude_pid.setpoint -= 1.5 * inner_state.controls.yaw as f64 * delta_time;
                 let attitude_pid_result =
                     Some(pids.attitude_pid.update(heading.clone(), delta_time));
 
                 let altitude = inner_state.altitude;
                 let altitude_pid_result = if inner_state.curr_flight_mode == FlightMode::AltiAtti {
                     pids.altitude_pid.setpoint +=
-                        0.5 * inner_state.controls.elevation as f64 * delta_time;
+                        0.75 * inner_state.controls.elevation as f64 * delta_time;
                     Some(pids.altitude_pid.update(altitude.clone(), delta_time))
                 } else {
                     None
@@ -360,11 +360,11 @@ impl BlimpMainAlgo {
                 let mut lrfvs = Vec::<na::Vector3<f64>>::new();
                 for i in 0..4 {
                     lrfvs.push(na::Vector3::<f64>::zeros());
-                    lrfvs[i].y +=
-                        inner_state.controls.yaw as f64 * (if i % 2 == 0 { 1.0 } else { -1.0 });
-                    // lrfvs[i].z += 0.2;
                     // lrfvs[i].y +=
-                    //     attitude_pid_result.unwrap_or(0.0) * (if i % 2 == 0 { 1.0 } else { -1.0 });
+                    //     inner_state.controls.yaw as f64 * (if i % 2 == 0 { 1.0 } else { -1.0 });
+                    // lrfvs[i].z += 0.2;
+                    lrfvs[i].y +=
+                        attitude_pid_result.unwrap_or(0.0) * (if i % 2 == 0 { -1.0 } else { 1.0 });
                     lrfvs[i].z += pitch_result * (if i >= 2 { -1.0 } else { 1.0 });
                     lrfvs[i].z += roll_result * (if i % 2 == 0 { 1.0 } else { -1.0 });
                 }
