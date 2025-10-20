@@ -250,10 +250,10 @@ impl BlimpMainAlgo {
             }),
 
             pids: TRwLock::new(BlimpPids {
-                attitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0, Some(std::f64::consts::PI)),
+                attitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 3.5, Some(std::f64::consts::PI)),
                 altitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0, None),
                 pitch_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0, Some(std::f64::consts::PI)),
-                roll_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0, Some(std::f64::consts::PI)),
+                roll_pid: PidRegulator::new(0.0, 2.5, 0.2, 3.0, Some(std::f64::consts::PI)),
                 previous_step_time: Instant::now(),
             }),
         }
@@ -337,13 +337,13 @@ impl BlimpMainAlgo {
                     (tokio::time::Instant::now() - pids.previous_step_time).as_secs_f64();
 
                 let heading = inner_state.heading;
-                pids.attitude_pid.setpoint -= 1.5 * inner_state.controls.yaw as f64 * delta_time;
+                pids.attitude_pid.setpoint -= 1.0 * inner_state.controls.yaw as f64 * delta_time;
                 let attitude_pid_result =
                     Some(pids.attitude_pid.update(heading.clone(), delta_time));
 
                 let altitude = inner_state.altitude;
                 let altitude_pid_result = if inner_state.curr_flight_mode == FlightMode::AltiAtti {
-                    pids.altitude_pid.setpoint +=
+                    pids.altitude_pid.setpoint -=
                         0.75 * inner_state.controls.elevation as f64 * delta_time;
                     Some(pids.altitude_pid.update(altitude.clone(), delta_time))
                 } else {
