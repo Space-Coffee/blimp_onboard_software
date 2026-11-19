@@ -1,7 +1,7 @@
 [package]
 name = "blimp_onboard_software"
 version = "0.2.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 nalgebra = "0.33.2"
