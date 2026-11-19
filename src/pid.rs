@@ -1,5 +1,7 @@
 use num_traits;
 
+use crate::config::PidConfig;
+
 pub struct PidRegulator<T> {
     pub setpoint: T,
     pub k_p: T,
@@ -25,6 +27,16 @@ where
             deviation_integral: T::zero(),
             previous_deviation: T::zero(),
         }
+    }
+
+    pub fn new_from_config(setpoint: T, pid_config: &PidConfig<T>, circular: Option<T>) -> Self {
+        Self::new(
+            setpoint,
+            pid_config.k_p.clone(),
+            pid_config.k_i.clone(),
+            pid_config.k_d.clone(),
+            circular,
+        )
     }
 
     pub fn update(&mut self, current: T, delta_time: T) -> T {

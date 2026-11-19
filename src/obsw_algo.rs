@@ -8,6 +8,7 @@ use tokio;
 use tokio::sync::RwLock as TRwLock;
 use tokio::time::Instant;
 
+use crate::config::BlimpAlgoConfig;
 use crate::obsw_interface::*;
 use crate::pid::PidRegulator;
 
@@ -116,6 +117,7 @@ struct BlimpPids {
 }
 
 pub struct BlimpMainAlgo {
+    config: BlimpAlgoConfig,
     action_callback: TRwLock<
         Option<
             Arc<
@@ -150,11 +152,12 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
                     // h = (ln p_b - ln p) * R * T / g / M
                     // TODO: Stablize and smoothen
                     // TODO: Allow changing base (sea level) pressure and temperature
-                    let base_pressure: f64 = 101325.0;
-                    let temperature: f64 = 288.15;
+                    // let base_pressure: f64 = 101325.0;
+                    // let temperature: f64 = 288.15;
                     let const_coef: f64 = 29.2718; // R / g / M
-                    inner_state.altitude =
-                        (base_pressure.ln() - press.ln()) * const_coef * temperature;
+                    inner_state.altitude = (self.config.base_pressure.ln() - press.ln())
+                        * const_coef
+                        * self.config.temperature;
                 }
                 BlimpEvent::SensorDataF64(SensorType::MagnetometerHeading, heading) => {
                     inner_state.heading = *heading;
@@ -223,8 +226,10 @@ impl BlimpAlgorithm<BlimpEvent, BlimpAction> for BlimpMainAlgo {
 }
 
 impl BlimpMainAlgo {
-    pub fn new() -> Self {
+    pub fn new(config: BlimpAlgoConfig) -> Self {
         Self {
+            config: config.clone(),
+
             action_callback: TRwLock::new(None),
 
             inner_state: TRwLock::new(BlimpInnerState {
@@ -250,10 +255,22 @@ impl BlimpMainAlgo {
             }),
 
             pids: TRwLock::new(BlimpPids {
-                attitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 3.5, Some(std::f64::consts::PI)),
-                altitude_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0, None),
-                pitch_pid: PidRegulator::new(0.0, 1.0, 0.15, 2.0, Some(std::f64::consts::PI)),
-                roll_pid: PidRegulator::new(0.0, 2.5, 0.2, 3.0, Some(std::f64::consts::PI)),
+                attitude_pid: PidRegulator::new_from_config(
+                    0.0,
+                    &config.attitude_pid,
+                    Some(std::f64::consts::PI),
+                ),
+                altitude_pid: PidRegulator::new_from_config(0.0, &config.altitude_pid, None),
+                pitch_pid: PidRegulator::new_from_config(
+                    0.0,
+                    &config.pitch_pid,
+                    Some(std::f64::consts::PI),
+                ),
+                roll_pid: PidRegulator::new_from_config(
+                    0.0,
+                    &config.roll_pid,
+                    Some(std::f64::consts::PI),
+                ),
                 previous_step_time: Instant::now(),
             }),
         }
